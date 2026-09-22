@@ -259,12 +259,13 @@ export class WeekendScoutAgent extends BaseAgent {
         }
       }),
       read_page: tool({
-        description: "Read a web page as markdown (truncated to ~12k chars). Use for event pages to get date, place, price.",
+        description: "Read a web page as text (truncated to ~12k chars). Use for event pages to get date, place, price. Costs at most 1 search credit when the page needs extraction.",
         inputSchema: z.object({ url: z.string().url() }),
         execute: async ({ url }) => {
           if (ctx.budget.remaining < 3) return { error: "fetch budget exhausted this tick" };
           try {
-            return { url, content: await readPage(ctx.fetch, url) };
+            const r = await readPage(ctx.fetch, url, { tavilyKey: this.env.TAVILY_API_KEY });
+            return { url, via: r.via, content: r.content };
           } catch (err) {
             return { error: String((err as Error).message).slice(0, 200) };
           }
