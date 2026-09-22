@@ -2,7 +2,7 @@
 
 Two **persistent, self-scheduling agents** running 24/7 on a personal free Cloudflare account, using **DeepSeek V4.1 Flash through the $10/month OpenCode Go subscription**, managed by a **Claude orchestrator** that runs every 6 hours. Built for the team ask: *"everyone runs persistent agents with little oversight, on deepseek-flash-4-1, via OpenCode Go."*
 
-Live proof: the Worker's root page shows each agent's last tick, next tick, run count, token spend and notes over days. The plan and architecture diagram live in [docs/PLAN.md](docs/PLAN.md).
+Live: **https://yuke-persistent-agent-flow.yuke-521.workers.dev** — the Worker's root page shows each agent's last tick, next tick, run count, token spend and notes over days. The plan and architecture diagram live in [docs/PLAN.md](docs/PLAN.md).
 
 ## What "persistent" means here
 Each agent is a Cloudflare **Durable Object** with its own SQLite memory (notes, queue, runs, agent-specific tables) and **exactly one pending alarm that it sets itself at the end of every tick**. Nothing polls it; nothing keeps a process hot. A tick is: load memory → observe (deterministic fetches) → let the model decide with tools → persist → schedule the next wake. Errors never kill an agent; they back off and reschedule. The model chooses what to do and when to wake next, within charter policy and hard budget caps. That is the difference from a cron job.

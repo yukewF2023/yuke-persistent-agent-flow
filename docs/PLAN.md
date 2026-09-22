@@ -361,3 +361,9 @@ Blocked on account-side actions (Yuke):
 3. Paste the Tavily key in the open terminal tab (`npm run setup:env`), then `npm run secrets:push`.
 
 Gotchas learned: OpenCode Go requires `x-opencode-session` (stable per conversation) and a client-specific `user-agent`; DurableObjectStub<Agent subclass> types recurse too deep for tsc → narrow RPC interfaces in `src/rpc.ts`; SPA apps return 200 + `<title` for any path, so test "down" with an `expect` mismatch, not a fake path.
+
+## Live (2026-09-22, later)
+
+Deployed to the personal account: **https://yuke-persistent-agent-flow.yuke-521.workers.dev** (status page; `/api/status`; private `/picks?k=…`). All three account steps done (OpenCode region Global, workers.dev subdomain, Tavily key). Verified on production with DeepSeek V4.1 Flash: uptime tick ok (6/6 targets), scout research tick saved 10 dated candidates, forced delivery tick produced 7 picks with reasons + ntfy push. Fixes made on the way: OpenCode Go needs `x-opencode-session` + custom user agent; Jina Reader 429s from Cloudflare → direct fetch + Tavily extract fallback; DeepSeek batched all saves into one cut-off reply → "save as you go" rule, 2500 output tokens, forced `finish` on the last step via `prepareStep`.
+
+Orchestrator routine: creation refused with `repo_access_denied` — the Claude GitHub connection must include the **deepdotspace** org. Retry `RemoteTrigger create` once granted (cron `0 */6 * * *`, claude-sonnet-5, tools Bash/Read/Glob/Grep, env Default, WORKER_URL + token in the private prompt).
