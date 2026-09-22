@@ -216,7 +216,7 @@ export class WeekendScoutAgent extends BaseAgent {
         mode,
         data: { ...common, profile: { home: p.home, radius_min: p.radius_min, categories: p.categories, keywords: p.keywords, exclusions: p.exclusions, budget_max_usd: p.budget_max_usd, sources: p.sources }, known_candidates: known },
         hints: [
-          "Run 4–8 web_search queries (rotate keywords, add season/holiday angles), read 2–4 promising pages, then candidate_upsert real dated events on the upcoming weekends.",
+          "Run 4–8 web_search queries (rotate keywords, add season/holiday angles), read 2–4 promising pages, and candidate_upsert real dated events on the upcoming weekends AS YOU GO (max 3 upserts per step; never save everything in one final step).",
           "Do not upsert without a date and a place. Candidates the tool reports as already known need no further work."
         ]
       };

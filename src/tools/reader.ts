@@ -25,7 +25,7 @@ export function htmlToText(html: string): string {
  * JS-rendered (too little text), fall back to Tavily Extract (1 credit per call, up to 5 urls).
  */
 export async function readPage(ctx: FetchCtx, url: string, opts: { tavilyKey?: string; maxChars?: number } = {}): Promise<{ content: string; via: "direct" | "tavily" }> {
-  const maxChars = opts.maxChars ?? 12_000;
+  const maxChars = opts.maxChars ?? 7_000;
   const clip = (t: string) => (t.length > maxChars ? t.slice(0, maxChars) + "\n…[truncated]" : t);
   let direct = "";
   try {
