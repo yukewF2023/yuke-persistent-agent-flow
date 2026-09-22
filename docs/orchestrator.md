@@ -1,6 +1,6 @@
 # Admin API (for the orchestrator and `scripts/orch.sh`)
 
-Base URL: the Worker (`http://localhost:8787` in dev). Public routes need no auth. Admin routes need `Authorization: Bearer $ORCHESTRATOR_TOKEN`. Picks routes need `?k=$PICKS_TOKEN`.
+Base URL: the Worker (`https://yuke-persistent-agent-flow.yuke-521.workers.dev`; `WORKER_URL=http://localhost:8787` for the dev server). Public routes need no auth. Admin routes need `Authorization: Bearer $ORCHESTRATOR_TOKEN`. Picks routes need `?k=$PICKS_TOKEN`.
 
 ## Public
 | Route | Returns |

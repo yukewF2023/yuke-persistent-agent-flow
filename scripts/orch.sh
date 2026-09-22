@@ -10,7 +10,8 @@ if [ -f "$HERE/.dev.vars" ]; then
     [ -z "${!k:-}" ] && export "$k=$v"
   done < "$HERE/.dev.vars"
 fi
-WORKER_URL="${WORKER_URL:-http://localhost:8787}"
+# Defaults to production. For the local dev server: WORKER_URL=http://localhost:8787 scripts/orch.sh …
+WORKER_URL="${WORKER_URL:-https://yuke-persistent-agent-flow.yuke-521.workers.dev}"
 : "${ORCHESTRATOR_TOKEN:?ORCHESTRATOR_TOKEN missing (run npm run setup:env)}"
 auth=(-H "Authorization: Bearer $ORCHESTRATOR_TOKEN" -H "content-type: application/json")
 j() { if command -v jq >/dev/null; then jq .; else python3 -m json.tool; fi; }
