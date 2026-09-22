@@ -20,7 +20,7 @@ post() { local b="${2:-}"; [ -z "$b" ] && b='{}'; curl -sS "${auth[@]}" -X "${3:
 
 # ---- GitHub via REST (no gh needed). Needs GITHUB_TOKEN (fine-grained PAT, Issues read/write on this repo). ----
 GITHUB_REPO="${GITHUB_REPO:-yukewF2023/yuke-persistent-agent-flow}"
-gh_api() { : "${GITHUB_TOKEN:?GITHUB_TOKEN missing (fine-grained PAT with Issues read/write)}"; curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "$@"; }
+gh_api() { : "${GITHUB_TOKEN:?GITHUB_TOKEN missing (fine-grained PAT with Issues read/write)}"; curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" -H "Content-Type: application/json" "$@"; }
 gh_json() { python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))'; }
 
 cmd="${1:-help}"; shift || true
