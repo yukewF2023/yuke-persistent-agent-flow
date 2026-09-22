@@ -1,5 +1,7 @@
 # Orchestrator routine
 
+**Created 2026-09-22:** routine `trig_0144Fo1i6xENAvLa58h3BBQ1` ("Persistent agents orchestrator"), cron `22 */6 * * *` UTC (the server offsets the minute), model claude-sonnet-5, repo `yukewF2023/yuke-persistent-agent-flow`, tools Bash/Read/Glob/Grep, environment Default, no MCP connectors. Manage it at https://claude.ai/code/routines/trig_0144Fo1i6xENAvLa58h3BBQ1. The Worker URL and admin token live in the routine's private prompt (routines have no secret store); rotate the token with `wrangler secret put ORCHESTRATOR_TOKEN` + update the routine if it ever leaks.
+
 The manager runs as a Claude Code **scheduled cloud routine** every 6 hours with this repo checked out.
 
 ## Create it
