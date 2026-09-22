@@ -35,6 +35,26 @@ export interface TickCtx {
 const TRANSCRIPT_MAX = 16_000;
 const TICK_SCHEDULE = "tick";
 
+interface TranscriptStep {
+  finish: string;
+  text?: string;
+  calls: { tool: string; input: unknown }[];
+  results: { tool: string; output: string }[];
+}
+
+/** Shrink a transcript until it fits TRANSCRIPT_MAX while staying valid JSON (never slice the JSON string). */
+function compactTranscript(steps: TranscriptStep[]): string {
+  const size = (s: TranscriptStep[]) => JSON.stringify(s).length;
+  let cur = steps.map((s) => ({ ...s, calls: s.calls.map((c) => ({ ...c })), results: s.results.map((r) => ({ ...r })) }));
+  if (size(cur) <= TRANSCRIPT_MAX) return JSON.stringify(cur);
+  for (const limit of [250, 120, 60]) {
+    cur = cur.map((s) => ({ ...s, results: s.results.map((r) => ({ tool: r.tool, output: r.output.slice(0, limit) })), calls: s.calls.map((c) => ({ tool: c.tool, input: JSON.stringify(c.input).slice(0, limit) })), text: s.text?.slice(0, limit) }));
+    if (size(cur) <= TRANSCRIPT_MAX) return JSON.stringify(cur);
+  }
+  while (cur.length > 1 && size(cur) > TRANSCRIPT_MAX) cur = [{ finish: "truncated", calls: [], results: [], text: `[${steps.length - cur.length + 1} earlier steps dropped]` }, ...cur.slice(2)];
+  return JSON.stringify(cur);
+}
+
 /**
  * A persistent agent: durable memory in SQLite, one self-set alarm at all times,
  * a bounded LLM tool loop per tick, and never-throwing error handling.
@@ -403,7 +423,7 @@ export abstract class BaseAgent extends Agent<Env> {
     }
 
     const finishedAt = Date.now();
-    const transcriptStr = transcript ? JSON.stringify(transcript).slice(0, TRANSCRIPT_MAX) : null;
+    const transcriptStr = transcript ? compactTranscript(transcript as TranscriptStep[]) : null;
     this.sql`UPDATE runs SET finished_at = ${finishedAt}, status = ${status}, steps = ${steps}, input_tokens = ${inputTokens}, output_tokens = ${outputTokens}, subrequests = ${budget.used + steps}, llm_ms = ${llmMs}, wall_ms = ${finishedAt - now}, next_wake_s = ${nextWake}, summary = ${summary}, error = ${error}, transcript = ${transcriptStr} WHERE id = ${runId}`;
     this.kvSet("last_summary", summary);
     this.kvSet("last_wake_s", String(nextWake ?? 600));

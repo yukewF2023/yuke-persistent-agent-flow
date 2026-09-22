@@ -172,7 +172,16 @@ export async function handleAdmin(request: Request, env: Env, path: string[]): P
     }
     if (sub === "runs" && path[3] && method === "GET") {
       const run = await agent.getRun(Number(path[3]));
-      return run ? json({ ...run, transcript: run.transcript ? JSON.parse(run.transcript) : null }) : json({ error: "not found" }, 404);
+      if (!run) return json({ error: "not found" }, 404);
+      let transcript: unknown = null;
+      if (run.transcript) {
+        try {
+          transcript = JSON.parse(run.transcript);
+        } catch {
+          transcript = { raw: run.transcript, note: "stored transcript was not valid JSON (pre-fix truncation)" };
+        }
+      }
+      return json({ ...run, transcript });
     }
     if (sub === "rate" && id === "scout" && method === "POST") {
       const b = await body<{ candidateId?: number; rating?: "up" | "down"; reason?: string }>(request);
