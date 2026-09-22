@@ -1,6 +1,6 @@
 {
   "_comment": "url → GitHub repo for outage issues. Unknown → fallback repo.",
-  "fallback": "deepdotspace/yuke-persistent-agent-flow",
+  "fallback": "yukewF2023/yuke-persistent-agent-flow",
   "https://taskspace.app.space": null,
   "https://news.app.space": null,
   "https://tickets.app.space": null,

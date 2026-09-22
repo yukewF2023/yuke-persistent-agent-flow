@@ -4,7 +4,7 @@ The manager runs as a Claude Code **scheduled cloud routine** every 6 hours with
 
 ## Create it
 1. Deploy the Worker and note its URL (`https://yuke-persistent-agent-flow.<subdomain>.workers.dev`).
-2. Push this repo to GitHub (`deepdotspace/yuke-persistent-agent-flow`, private) and create two issues labelled `agents`: **Team log** and **Weekend picks**.
+2. Push this repo to GitHub (`yukewF2023/yuke-persistent-agent-flow`, private) and create two issues labelled `agents`: **Team log** and **Weekend picks**.
 3. In Claude Code, run `/schedule` and create a routine on this repo:
    - schedule: `0 */6 * * *` (every 6 h, UTC)
    - environment: `WORKER_URL=https://…workers.dev`, `ORCHESTRATOR_TOKEN=<from .dev.vars>` (as a secret)

@@ -2,14 +2,14 @@
 
 ## Context
 
-Teammate ask: everyone runs persistent, low-oversight agents on DeepSeek V4.1 Flash via the $10/mo OpenCode Go subscription, separate from day-to-day Claude/Codex coding. Scaled to **2 agents for now**. Yuke wants one self-contained repo, pushed **private to the `deepdotspace` GitHub org**, deployed to a **personal free Cloudflare account**, with one Claude orchestrator that genuinely manages the agents (not just reports on them) and a public status page that proves to the teammate the agents are running.
+Teammate ask: everyone runs persistent, low-oversight agents on DeepSeek V4.1 Flash via the $10/mo OpenCode Go subscription, separate from day-to-day Claude/Codex coding. Scaled to **2 agents for now**. Yuke wants one self-contained repo, pushed **private to Yuke's personal GitHub (`yukewF2023`)**, deployed to a **personal free Cloudflare account**, with one Claude orchestrator that genuinely manages the agents (not just reports on them) and a public status page that proves to the teammate the agents are running.
 
 "Persistent" is satisfied by design, not by a hot loop: durable memory in SQLite, LLM-chosen next action, LLM-chosen next wake time, visible continuity on a status page.
 
 Verified so far (read-only):
 - OpenCode Go credential already exists at `~/.local/share/opencode/auth.json` under key `opencode-go` (`{type:"api", key}`).
 - Go's OpenAI-compatible endpoint: `https://opencode.ai/zen/go/v1` (`/chat/completions`, `/models`), `Authorization: Bearer <key>`, model id `deepseek-v4.1-flash` (= the teammate's "deepseek-flash-4-1").
-- `gh` active account `yukewF2023` is an **admin of the `deepdotspace` org** → `gh repo create deepdotspace/yuke-persistent-agent-flow --private`.
+- `gh` active account `yukewF2023` is an **admin of the `deepdotspace` org** → `gh repo create yukewF2023/yuke-persistent-agent-flow --private`.
 - Wrangler has an oauth token but account unknown. Personal Cloudflare account is **yuke@deep.space**. Before first deploy: `npx wrangler whoami`; if it is not that account, Yuke runs `npx wrangler login` (browser OAuth, I can't do it) and picks the personal account.
 - This plan file is committed to the repo as `docs/PLAN.md` and kept updated.
 - Node 24, Homebrew, tmux + opencode installed. No global wrangler (project-local).
@@ -103,7 +103,7 @@ flowchart LR
 
 Six pieces, one job each:
 
-1. **Repo** `/Users/yukewu/Desktop/Work/yuke-persistent-agent-flow` → GitHub `deepdotspace/yuke-persistent-agent-flow` (private). Code, charters, orchestrator prompt, team goals, app→repo map, setup scripts, docs.
+1. **Repo** `/Users/yukewu/Desktop/Work/yuke-persistent-agent-flow` → GitHub `yukewF2023/yuke-persistent-agent-flow` (private). Code, charters, orchestrator prompt, team goals, app→repo map, setup scripts, docs.
 2. **Cloudflare Worker + Durable Objects** (personal free account). One DO per agent (`getAgentByName(env.UPTIME, "main")`), state in each DO's SQLite, self-scheduled alarms = "kept running". Plus one small `TeamState` DO for team-level state (charter overrides, orchestrator memory/log). The Worker is a thin router (10 ms CPU); LLM/SQL work runs inside DOs.
 3. **OpenCode Go**: sole LLM provider for the agents. Key copied from the local opencode auth file into `.dev.vars` (gitignored), pushed with `wrangler secret bulk`.
 4. **Claude Code cloud routine**: the manager. Every 6 h. Full loop below. Needs `WORKER_URL` + `ORCHESTRATOR_TOKEN` in its env and GitHub access (routine sandbox has the repo; issue ops via `gh`). Fallback if the routine can't hold the token: Mac launchd running `claude -p` with the same prompt.
@@ -312,7 +312,7 @@ Picks (token `k` = `PICKS_TOKEN`, query param or header): `GET /picks`, `GET /ap
 4. `tools/` (common, http, search, reader, ticketmaster, notify), `uptime-agent.ts`, `charters/uptime.md`; `weekend-scout-agent.ts`, `charters/weekend-scout.md`, seed `SCOUT_PROFILE`.
 5. `admin.ts`, `status-page.ts`, `docs/orchestrator.md`, `scripts/orch.sh`, `orchestrator/{PROMPT,GOALS,ROUTINE}.md`, `apps.json`, README.
 6. `wrangler whoami` → personal account; `wrangler secret bulk .dev.vars`; `npm run deploy`; `wrangler tail` for two cycles.
-7. `gh repo create deepdotspace/yuke-persistent-agent-flow --private --source . --push`; create the standing "Team log" issue.
+7. `gh repo create yukewF2023/yuke-persistent-agent-flow --private --source . --push`; create the standing "Team log" issue.
 8. Create the cloud routine (`schedule` skill) from `ROUTINE.md`, run once manually, confirm it acts (e.g. seeds queue from GOALS.md) and comments on the Team log issue.
 
 ## Verification
@@ -353,7 +353,7 @@ Prod:
 
 ## Status (2026-09-22)
 
-Built and verified locally (`wrangler dev`): both agents bootstrap one alarm each, tick, persist runs/notes, dedupe schedules, lock against concurrent ticks; uptime writes DOWN/RECOVERED notes with 300 s / 900 s wakes; charter overrides version; admin auth 401s; picks page renders, gates on token, rates and sends feedback to the mailbox; CLI wrapper works on macOS bash 3.2. Repo pushed private to `deepdotspace/yuke-persistent-agent-flow`; issues #1 Team log, #2 Weekend picks created. Secrets pushed to the personal Cloudflare account.
+Built and verified locally (`wrangler dev`): both agents bootstrap one alarm each, tick, persist runs/notes, dedupe schedules, lock against concurrent ticks; uptime writes DOWN/RECOVERED notes with 300 s / 900 s wakes; charter overrides version; admin auth 401s; picks page renders, gates on token, rates and sends feedback to the mailbox; CLI wrapper works on macOS bash 3.2. Repo pushed private to `yukewF2023/yuke-persistent-agent-flow`; issues #1 Team log, #2 Weekend picks created. Secrets pushed to the personal Cloudflare account.
 
 Blocked on account-side actions (Yuke):
 1. OpenCode dashboard → workspace Privacy → region **Global** (DeepSeek V4.1 Flash on Go refuses otherwise: "This Go model requires Global regions").
