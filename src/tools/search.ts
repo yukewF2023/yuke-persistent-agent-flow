@@ -33,7 +33,7 @@ export async function tavilySearch(
   return (data.results ?? []).map((r) => ({
     title: r.title,
     url: r.url,
-    snippet: (r.content ?? "").slice(0, 400),
+    snippet: (r.content ?? "").slice(0, 280),
     published: r.published_date ?? null,
     score: r.score
   }));

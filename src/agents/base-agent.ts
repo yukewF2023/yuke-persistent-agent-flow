@@ -458,7 +458,7 @@ export abstract class BaseAgent extends Agent<Env> {
       `You are "${this.displayName}" (id: ${this.agentId}), a persistent agent running as a Cloudflare Durable Object. This is run #${runCount} (trigger: ${ctx.trigger}, reason: ${ctx.reason}). Now: ${new Date(ctx.now).toISOString()}.`,
       "Operating rules:",
       `- Reason over the OBSERVATION and your MEMORY. Be terse; no filler.`,
-      `- You have at most ${maxSteps} tool-calling steps and a fetch budget of ${ctx.budget.remaining} more requests this tick. Tools tell you when the budget is gone.`,
+      `- You have at most ${maxSteps} tool-calling steps and a fetch budget of ${ctx.budget.remaining} more requests this tick. Tools tell you when the budget is gone. On your last step only \`finish\` is available, so wrap up before then.`,
       `- You MUST end by calling the \`finish\` tool with a one-line summary and next_wake_seconds between ${wb.min} and ${wb.max}. Follow the wake policy in your charter.`,
       `- Notes are public. Never put secrets, tokens, or anyone's personal data in a note. Never write "all healthy" notes; only write notes worth remembering.`,
       `- Queue items come from your manager (the orchestrator). Complete or drop them with the queue tools when done.`,
@@ -490,6 +490,9 @@ export abstract class BaseAgent extends Agent<Env> {
       prompt: user,
       tools,
       stopWhen: [isStepCount(maxSteps), hasToolCall("finish")],
+      // Last allowed step: only `finish` is available and it is required, so a tick always ends with a decision.
+      prepareStep: ({ stepNumber }) =>
+        stepNumber >= maxSteps - 1 ? { activeTools: ["finish"], toolChoice: { type: "tool", toolName: "finish" } } : undefined,
       maxOutputTokens,
       maxRetries: 1,
       abortSignal: AbortSignal.timeout(120_000)

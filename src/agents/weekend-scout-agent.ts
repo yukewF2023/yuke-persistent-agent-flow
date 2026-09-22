@@ -252,7 +252,7 @@ export class WeekendScoutAgent extends BaseAgent {
           if (ctx.budget.remaining < 3) return { error: "fetch budget exhausted this tick" };
           this.kvSet(`tavily_used:${this.localToday(p.tz)}`, String(used + 1));
           try {
-            return { results: await tavilySearch(ctx.fetch, this.env.TAVILY_API_KEY, query, { maxResults: 8, days }) };
+            return { results: await tavilySearch(ctx.fetch, this.env.TAVILY_API_KEY, query, { maxResults: 6, days }) };
           } catch (err) {
             return { error: String((err as Error).message).slice(0, 200) };
           }
