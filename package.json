@@ -1,0 +1,28 @@
+{
+  "name": "yuke-persistent-agent-flow",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Two persistent, self-scheduling agents on Cloudflare Durable Objects (DeepSeek V4.1 Flash via OpenCode Go) managed by a Claude orchestrator.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types",
+    "check": "tsc --noEmit",
+    "setup:env": "node scripts/setup-env.mjs",
+    "secrets:push": "wrangler secret bulk .dev.vars",
+    "tail": "wrangler tail --format pretty"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^3.0.53",
+    "agents": "^0.24.0",
+    "ai": "^7.0.109",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260922.1",
+    "@types/node": "^26.6.2",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.136.2"
+  }
+}

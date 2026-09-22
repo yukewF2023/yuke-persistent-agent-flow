@@ -1,0 +1,35 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "yuke-persistent-agent-flow",
+  // personal account (yuke@deep.space) — the login also spans a second account
+  "account_id": "5213085a6e2cf0a09722c16ca2681648",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "UPTIME", "class_name": "UptimeAgent" },
+      { "name": "SCOUT", "class_name": "WeekendScoutAgent" },
+      { "name": "TEAM", "class_name": "TeamState" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["UptimeAgent", "WeekendScoutAgent", "TeamState"] }
+  ],
+
+  // charters/*.md are imported as strings
+  "rules": [{ "type": "Text", "globs": ["**/*.md"], "fallthrough": true }],
+
+  "vars": {
+    "LLM_BASE_URL": "https://opencode.ai/zen/go/v1",
+    "LLM_MODEL": "deepseek-v4.1-flash",
+    "MAX_STEPS": "8",
+    "MAX_OUTPUT_TOKENS": "900",
+    "DAILY_TOKEN_BUDGET": "400000",
+    "UPTIME_TARGETS": "[{\"url\":\"https://taskspace.app.space\",\"expect\":\"<title\"},{\"url\":\"https://news.app.space\",\"expect\":\"<title\"},{\"url\":\"https://tickets.app.space\",\"expect\":\"<title\"},{\"url\":\"https://recipe-tracker.app.space\",\"expect\":\"<title\"},{\"url\":\"https://podcastify.app.space\",\"expect\":\"<title\"},{\"url\":\"https://gist.app.space\",\"expect\":\"<title\"}]",
+    "SCOUT_PROFILE": "{\"home\":\"West Hartford, CT\",\"radius_min\":45,\"categories\":[\"date idea\",\"coffee brewing session\",\"learn how to\",\"farm experience\",\"seasonal\",\"outdoors\",\"market\"],\"keywords\":[\"Hartford CT weekend events\",\"West Hartford things to do this weekend\",\"CT farm experience\",\"coffee cupping class Hartford\",\"pottery class West Hartford\",\"apple picking CT\",\"date night ideas Hartford\",\"workshop class Hartford CT weekend\"],\"exclusions\":[\"21+ nightlife\",\"kids-only\"],\"budget_max_usd\":80,\"sources\":[\"https://ctvisit.com/events\",\"https://www.ctnow.com/things-to-do/\"],\"deliver\":[\"Wed 18:00\",\"Fri 12:00\"],\"tz\":\"America/New_York\"}"
+  }
+}
