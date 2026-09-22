@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.yuke.agents-orchestrator</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>cd "$HOME/Desktop/Work/yuke-persistent-agent-flow" &amp;&amp; WORKER_URL=https://yuke-persistent-agent-flow.yuke-521.workers.dev scripts/orch.sh manager-now</string>
+  </array>
+  <key>StartInterval</key><integer>21600</integer>
+  <key>RunAtLoad</key><false/>
+  <key>StandardOutPath</key><string>/tmp/agents-orchestrator.log</string>
+  <key>StandardErrorPath</key><string>/tmp/agents-orchestrator.err</string>
+</dict>
+</plist>

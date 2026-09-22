@@ -14,8 +14,10 @@ The manager runs as a Claude Code **scheduled cloud routine** every 6 hours with
    - tools: shell (for `scripts/orch.sh` and `gh`), file read.
 4. Run it once by hand and check the Team log issue for its first comment.
 
+**Status 2026-09-22:** the routine is created but **paused**. Two runs (sessions `cse_01Ar2V85…`, `cse_01Sejsgz…`) failed the same way: the cloud sandbox's egress proxy rejects `yuke-persistent-agent-flow.yuke-521.workers.dev:443` with a 403 policy denial (fixed allowlist: Anthropic, npm, PyPI…), even with the URL declared on the routine; `gh` is also not installed there. To use the cloud routine, change the **Default** environment's network access at https://claude.ai/code/environments to allow the Worker host (or full network), then re-enable the routine. Until then, use the Mac fallback below.
+
 ## Fallback: run it from the Mac
-`scripts/orch.sh manager-now` runs the same prompt with the local `claude` CLI (headless, `-p`). To schedule it locally, add a launchd job that calls that command every 6 h while the Mac is awake.
+`scripts/orch.sh manager-now` runs the same prompt with the local `claude` CLI (headless, `-p`); the CLI must be logged in (`claude login`). To schedule it: `scripts/install-launchd.sh` installs a launchd job that runs it every 6 h while the Mac is awake (logs in `/tmp/agents-orchestrator.log`).
 
 ## Talking to the manager
 Anything you tell it lands in the Worker's feedback mailbox and is read on the next run:
