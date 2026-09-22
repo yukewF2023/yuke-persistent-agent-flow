@@ -350,3 +350,14 @@ Prod:
 - `apps.json` repo mapping for the 6 apps (fill from deepdotspace org; unknown → fallback to this repo).
 - Confirm personal Cloudflare account via `wrangler whoami` before deploy.
 - Whether the cloud routine can hold `ORCHESTRATOR_TOKEN` + use `gh`; else Mac launchd fallback.
+
+## Status (2026-09-22)
+
+Built and verified locally (`wrangler dev`): both agents bootstrap one alarm each, tick, persist runs/notes, dedupe schedules, lock against concurrent ticks; uptime writes DOWN/RECOVERED notes with 300 s / 900 s wakes; charter overrides version; admin auth 401s; picks page renders, gates on token, rates and sends feedback to the mailbox; CLI wrapper works on macOS bash 3.2. Repo pushed private to `deepdotspace/yuke-persistent-agent-flow`; issues #1 Team log, #2 Weekend picks created. Secrets pushed to the personal Cloudflare account.
+
+Blocked on account-side actions (Yuke):
+1. OpenCode dashboard → workspace Privacy → region **Global** (DeepSeek V4.1 Flash on Go refuses otherwise: "This Go model requires Global regions").
+2. Cloudflare dashboard → open **Workers & Pages** once on the yuke@deep.space account to create the workers.dev subdomain, then `npm run deploy`.
+3. Paste the Tavily key in the open terminal tab (`npm run setup:env`), then `npm run secrets:push`.
+
+Gotchas learned: OpenCode Go requires `x-opencode-session` (stable per conversation) and a client-specific `user-agent`; DurableObjectStub<Agent subclass> types recurse too deep for tsc → narrow RPC interfaces in `src/rpc.ts`; SPA apps return 200 + `<title` for any path, so test "down" with an `expect` mismatch, not a fake path.
