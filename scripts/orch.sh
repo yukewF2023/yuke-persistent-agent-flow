@@ -18,6 +18,11 @@ j() { if command -v jq >/dev/null; then jq .; else python3 -m json.tool; fi; }
 get() { curl -sS "${auth[@]}" "$WORKER_URL$1" | j; }
 post() { local b="${2:-}"; [ -z "$b" ] && b='{}'; curl -sS "${auth[@]}" -X "${3:-POST}" "$WORKER_URL$1" -d "$b" | j; }
 
+# ---- GitHub via REST (no gh needed). Needs GITHUB_TOKEN (fine-grained PAT, Issues read/write on this repo). ----
+GITHUB_REPO="${GITHUB_REPO:-yukewF2023/yuke-persistent-agent-flow}"
+gh_api() { : "${GITHUB_TOKEN:?GITHUB_TOKEN missing (fine-grained PAT with Issues read/write)}"; curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "$@"; }
+gh_json() { python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))'; }
+
 cmd="${1:-help}"; shift || true
 case "$cmd" in
   status)        curl -sS "$WORKER_URL/api/status" | j ;;
@@ -47,6 +52,11 @@ case "$cmd" in
   feedback-list) get "/admin/team/feedback?status=${1:-new}" ;;
   feedback-apply) post "/admin/team/feedback/${1:?id}/apply" "{\"status\":\"${2:-applied}\",\"detail\":\"${3:-}\"}" ;;
   picks-link)    echo "$WORKER_URL/picks?k=${PICKS_TOKEN:?PICKS_TOKEN missing}" ;;
+  gh-issues)     gh_api "https://api.github.com/repos/$GITHUB_REPO/issues?state=open&labels=${1:-agents}&per_page=50" | python3 -c 'import json,sys;[print(i["number"],"|",i["title"],"|",i["html_url"]) for i in json.load(sys.stdin)]' ;;
+  gh-comments)   gh_api "https://api.github.com/repos/$GITHUB_REPO/issues/${1:?issue number}/comments?per_page=100${2:+&since=$2}" | python3 -c 'import json,sys;[print(json.dumps({"id":c["id"],"author":c["user"]["login"],"at":c["created_at"],"body":c["body"]})) for c in json.load(sys.stdin)]' ;;
+  gh-comment)    gh_api -X POST "https://api.github.com/repos/$GITHUB_REPO/issues/${1:?issue number}/comments" -d "{\"body\":$(printf '%s' "${2:?body}" | gh_json)}" | python3 -c 'import json,sys;c=json.load(sys.stdin);print(c.get("html_url") or c)' ;;
+  gh-issue-create) repo="${3:-$GITHUB_REPO}"; GITHUB_REPO="$repo" gh_api -X POST "https://api.github.com/repos/$repo/issues" -d "{\"title\":$(printf '%s' "${1:?title}" | gh_json),\"body\":$(printf '%s' "${2:-}" | gh_json),\"labels\":[\"agents\"]}" | python3 -c 'import json,sys;c=json.load(sys.stdin);print(c.get("number"),c.get("html_url") or c)' ;;
+  gh-issue-close) gh_api -X PATCH "https://api.github.com/repos/${3:-$GITHUB_REPO}/issues/${1:?issue number}" -d "{\"state\":\"closed\",\"state_reason\":\"completed\"}" >/dev/null && { [ -n "${2:-}" ] && "$0" gh-comment "$1" "$2" || true; } && echo "closed #$1" ;;
   manager-now)   command -v claude >/dev/null || { echo "claude CLI not found"; exit 1; }
                  export WORKER_URL ORCHESTRATOR_TOKEN
                  cd "$HERE" && claude -p "$(cat orchestrator/PROMPT.md)" --allowedTools "Bash(scripts/orch.sh:*),Bash(gh:*),Read,Glob,Grep" ;;

@@ -57,3 +57,13 @@ scripts/orch.sh charter scout /tmp/override.md "always include one free option"
 scripts/orch.sh feedback "more outdoors, fewer coffee things"
 scripts/orch.sh picks-link
 ```
+
+## GitHub (REST, no `gh`)
+Needs `GITHUB_TOKEN` (fine-grained PAT scoped to this repo, Issues read/write) and optionally `GITHUB_REPO` (default `yukewF2023/yuke-persistent-agent-flow`).
+```bash
+scripts/orch.sh gh-issues                     # open issues labelled agents
+scripts/orch.sh gh-comments 1 2026-09-22T00:00:00Z   # comments on #1 since a timestamp (JSON lines)
+scripts/orch.sh gh-comment 1 "run summary…"
+scripts/orch.sh gh-issue-create "Down: gist.app.space" "evidence…"        # in this repo (or pass owner/repo as 3rd arg)
+scripts/orch.sh gh-issue-close 7 "recovered at 14:02Z"
+```
