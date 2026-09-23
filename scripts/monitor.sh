@@ -10,13 +10,16 @@ python3 - "$S" <<'PY'
 import json,sys,datetime,time
 d=json.loads(sys.argv[1]); now=time.time()*1000
 anom=[]
-def ago(ts): return "never" if not ts else f"{int((now-ts)/60000)}m ago"
+def ago(ts):
+    if not ts: return "never"
+    d=int((now-ts)/60000)
+    return f"{d}m ago" if d>=0 else f"in {-d}m"
 print(f"# snapshot {datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%d %H:%MZ')}")
 for k,a in d["agents"].items():
     acts=a["recentActivity"]; last=acts[0]["ts"] if acts else None
     errs=[x for x in acts if x["kind"]=="error"]
     g=a["governor"]; sp=a["spend"]
-    print(f"- {k}: {'PAUSED' if a['paused'] else 'working'} | now: {a['workingNow']} | last activity {ago(last)} | segments {a['segmentCount']} | work today {a['workDoneToday']} | thinks today {a['thinksToday']} | open {a['workOpen']} | spend today ${sp['todayUsd']:.3f} 5h ${sp['fiveHourUsd']:.3f} month ${sp['monthUsd']:.3f} / ${g['monthlyBudgetUsd']} | bucket ${g['bucketUsd']:.3f} | next alarm {ago(a['nextTickAt']).replace('ago','from now') if a['nextTickAt'] else 'NONE'}")
+    print(f"- {k}: {'PAUSED' if a['paused'] else 'working'} | now: {a['workingNow']} | last activity {ago(last)} | segments {a['segmentCount']} | work today {a['workDoneToday']} | thinks today {a['thinksToday']} | open {a['workOpen']} | spend today ${sp['todayUsd']:.3f} 5h ${sp['fiveHourUsd']:.3f} month ${sp['monthUsd']:.3f} / ${g['monthlyBudgetUsd']} | bucket ${g['bucketUsd']:.3f} | next alarm {ago(a['nextTickAt']) if a['nextTickAt'] else 'NONE'}")
     if a["lastError"]: print(f"    lastError: {a['lastError'][:160]}")
     if errs: print(f"    recent errors ({len(errs)}): " + " || ".join(e["text"][:100] for e in errs[:3]))
     if not a["paused"]:
@@ -35,7 +38,7 @@ for k,a in d["agents"].items():
         if down: anom.append("uptime: DOWN " + ", ".join(down))
         print(f"    apps: {sum(1 for t in ex.get('targets',[]) if t['ok'])}/{len(ex.get('targets',[]))} ok, checks today {ex.get('checksToday')}, probes today {ex.get('probesToday')}")
     if k=="scout":
-        c=ex.get("candidates",{}); print(f"    candidates: {c} | searches today {ex.get('searchesToday')}/{ex.get('tavily',{}).get('dailyCap')} | pages unextracted {ex.get('pagesUnextracted')} | next delivery {ago(ex.get('nextDeliveryAt')).replace('ago','from now') if ex.get('nextDeliveryAt') else '?'}")
+        c=ex.get("candidates",{}); print(f"    candidates: {c} | searches today {ex.get('searchesToday')}/{ex.get('tavily',{}).get('dailyCap')} | pages unextracted {ex.get('pagesUnextracted')} | next delivery {ago(ex.get('nextDeliveryAt')) if ex.get('nextDeliveryAt') else '?'}")
 o=d.get("orchestrator") or {}
 lr=o.get("lastRunAt")
 print(f"- orchestrator: last run {ago(lr)}; memory keys: {list((o.get('memory') or {}).keys())[:6]}")
