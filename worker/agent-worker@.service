@@ -1,0 +1,25 @@
+[Unit]
+Description=Agent board worker %i (opencode + DeepSeek V4.1 Flash)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=agent
+Group=agent
+EnvironmentFile=/etc/agent-worker.env
+Environment=WORKER_ID=%H-%i
+Environment=HOME=/home/agent
+Environment=WORK_ROOT=/srv/work
+Environment=TEMPLATES=/srv/templates
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/srv/work
+ExecStart=/usr/bin/node /srv/agent/worker.mjs %i
+Restart=always
+RestartSec=15
+TimeoutStopSec=90
+KillMode=mixed
+MemoryMax=450M
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

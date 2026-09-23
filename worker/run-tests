@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Serializes test runs across the two workers on the small VM: ./run-tests npx vitest run
+[ $# -gt 0 ] || { echo "usage: ./run-tests <command...>"; exit 2; }
+export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=384}"
+exec flock -w 900 /srv/lock/tests "$@"

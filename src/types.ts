@@ -1,145 +1,126 @@
-/** Bindings + vars + secrets. Extends the wrangler-generated Cloudflare.Env (DO namespaces stay untyped there; see rpc.ts). */
-export interface Env extends Cloudflare.Env {
-  OPENCODE_API_KEY: string;
+/** Worker bindings and secrets. */
+export interface Env {
+  BOARD: DurableObjectNamespace;
+  /** Bearer token for /manager/* (the Claude manager routine and humans). */
   ORCHESTRATOR_TOKEN: string;
-  PICKS_TOKEN: string;
-  TAVILY_API_KEY?: string;
-  NTFY_TOPIC?: string;
-  TICKETMASTER_API_KEY?: string;
+  /** Bearer token for /worker/* (the DeepSeek worker processes). */
+  WORKER_TOKEN: string;
 }
 
-export type AgentId = "uptime" | "scout";
+export type Role = "public" | "manager" | "worker";
 
-export type NoteKind = "change" | "finding" | "recommendation" | "thought" | "error" | "admin";
+export type TaskStatus = "ready" | "claimed" | "running" | "review" | "accepted" | "rejected" | "blocked" | "cancelled";
+export type TaskKind = "ts" | "py" | "check" | "other";
 
-export interface Note {
-  id: number;
-  ts: number;
-  kind: NoteKind;
+export interface GoalRow {
+  id: string;
   title: string;
-  body: string | null;
-  run_id: number | null;
-  meta: string | null;
-}
-
-export interface QueueItem {
-  id: number;
+  body: string;
+  done_when: string | null;
+  min_ready: number;
+  status: "active" | "paused" | "done";
   created_at: number;
   updated_at: number;
-  status: "open" | "doing" | "done" | "dropped";
-  priority: number;
-  task: string;
-  source: string;
-  result: string | null;
 }
 
-export interface RunRow {
+export interface TaskRow {
   id: number;
-  started_at: number;
+  goal_id: string;
+  key: string;
+  title: string;
+  spec: string;
+  acceptance: string;
+  deps: string; // JSON number[]
+  kind: TaskKind;
+  status: TaskStatus;
+  priority: number;
+  attempt: number;
+  max_attempts: number;
+  max_minutes: number;
+  worker_id: string | null;
+  lease_until: number | null;
+  claimed_at: number | null;
+  submitted_at: number | null;
   finished_at: number | null;
-  trigger: string;
-  status: "ok" | "error" | "skipped" | "paused" | "budget" | "running";
-  steps: number;
-  input_tokens: number;
-  output_tokens: number;
-  subrequests: number;
-  llm_ms: number;
-  wall_ms: number;
-  next_wake_s: number | null;
-  summary: string | null;
-  error: string | null;
-  transcript: string | null;
   cost_usd: number;
-  work_item: string | null;
-}
-
-export interface TickResult {
-  runId: number;
-  status: RunRow["status"];
+  tokens_in: number;
+  tokens_out: number;
+  tokens_cached: number;
   steps: number;
-  subrequests: number;
-  inputTokens: number;
-  outputTokens: number;
-  nextWakeSeconds: number | null;
-  nextTickAt: number | null;
-  summary: string | null;
-  error: string | null;
-  thinks: number;
-  costUsd: number;
-}
-
-export interface WorkItem {
-  id: number;
-  kind: "code" | "think";
-  action: string;
-  args: string | null;
-  priority: number;
-  status: "open" | "doing" | "done" | "failed";
-  source: string;
+  last_error: string | null;
+  review_notes: string | null;
   created_at: number;
-  started_at: number | null;
-  done_at: number | null;
-  result: string | null;
+  updated_at: number;
 }
 
-export interface ActivityRow {
+export interface DeliverableRow {
   id: number;
-  ts: number;
-  kind: string;
-  text: string;
-  work_id: number | null;
-  cost_usd: number;
+  task_id: number;
+  attempt: number;
+  report: string;
+  files: string; // JSON {path: content}
+  bytes: number;
+  nfiles: number;
+  truncated: number;
+  steps: number;
+  session_id: string | null;
+  worker_id: string | null;
+  created_at: number;
 }
 
-export interface SpendWindows {
-  fiveHourUsd: number;
-  weekUsd: number;
-  monthUsd: number;
-  todayUsd: number;
-  todayTokens: number;
-}
-
-export interface AgentStatus {
-  id: AgentId;
-  name: string;
-  paused: boolean;
-  runCount: number;
-  lastTickAt: number | null;
-  nextTickAt: number | null;
-  lastSummary: string | null;
-  lastError: string | null;
-  charterVersion: number;
-  budgetToday: { tokens: number; limit: number };
-  queueOpen: number;
-  pendingSchedules: number;
-  segmentCount: number;
-  workingNow: string | null;
-  workOpen: number;
-  workDoneToday: number;
-  thinksToday: number;
-  spend: SpendWindows;
-  governor: { monthlyBudgetUsd: number; burstUsd: number; bucketUsd: number; waitUntil: number | null; avgThinkUsd: number };
-  recentRuns: Pick<RunRow, "id" | "started_at" | "status" | "steps" | "input_tokens" | "output_tokens" | "subrequests" | "next_wake_s" | "summary" | "trigger" | "cost_usd" | "work_item">[];
-  recentNotes: Note[];
-  recentActivity: ActivityRow[];
-  extra: Record<string, any>;
-}
-
-export interface FeedbackRow {
+export interface ReviewRow {
   id: number;
-  ts: number;
-  source: string;
-  author: string;
-  text: string;
-  status: "new" | "applied" | "ignored";
-  applied_detail: string | null;
+  task_id: number;
+  attempt: number;
+  verdict: "accept" | "reject";
+  notes: string | null;
+  who: string;
+  created_at: number;
 }
 
-export interface LogRow {
+export interface EventRow {
   id: number;
   ts: number;
   actor: string;
-  action: string;
-  target: string | null;
-  detail: string | null;
+  kind: string;
+  task_id: number | null;
+  text: string;
+}
+
+export interface WorkerRow {
+  id: string;
+  host: string | null;
+  version: string | null;
+  task_id: number | null;
+  last_seen: number;
+  note: string | null;
+  tasks_done: number;
+  tasks_failed: number;
+}
+
+export interface SpendSummary {
+  todayUsd: number;
+  fiveHourUsd: number;
+  weekUsd: number;
+  monthUsd: number;
+  todayTasks: number;
+  paceUsdPerDay: number;
+  inflightEstimateUsd: number;
+  pacing: { reason: string; retryAfterS: number } | null;
+}
+
+/** Shape of GET /api/status (also what the status page renders). */
+export interface BoardStatus {
+  generatedAt: number;
+  goals: (GoalRow & { counts: Record<string, number> })[];
+  counts: Record<string, number>;
+  workers: (WorkerRow & { task_key: string | null })[];
+  running: Pick<TaskRow, "id" | "key" | "title" | "worker_id" | "claimed_at" | "lease_until" | "attempt" | "status">[];
+  reviewQueue: Pick<TaskRow, "id" | "key" | "title" | "submitted_at" | "attempt">[];
+  recentAccepted: Pick<TaskRow, "id" | "key" | "title" | "finished_at" | "cost_usd" | "attempt">[];
+  blocked: Pick<TaskRow, "id" | "key" | "title" | "last_error" | "attempt">[];
+  spend: SpendSummary;
+  needsHuman: { ts: number; text: string }[];
+  events: EventRow[];
+  manager: { lastRunAt: number | null; lockedUntil: number | null };
 }

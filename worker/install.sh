@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Bootstraps a Debian 12 VM as the worker host. Idempotent. Run as root from a copy of this directory:
+#   sudo bash /tmp/worker/install.sh
+# Expects /etc/agent-worker.env (BOARD_URL, WORKER_TOKEN, OPENCODE_API_KEY, OPENCODE_MODEL) or ./agent-worker.env next to this script.
+set -euo pipefail
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OPENCODE_VERSION="${OPENCODE_VERSION:-1.18.32}"
+export DEBIAN_FRONTEND=noninteractive
+
+echo "== packages"
+apt-get update -y -qq
+apt-get install -y -qq curl git ca-certificates build-essential python3 python3-venv python3-pip tar gzip util-linux >/dev/null
+if ! command -v node >/dev/null || [[ "$(node -v)" != v22* ]]; then
+  curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null
+  apt-get install -y -qq nodejs >/dev/null
+fi
+node -v; npm -v
+
+echo "== swap (2 GB)"
+if ! swapon --show | grep -q /swapfile; then
+  fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile
+  grep -q /swapfile /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+sysctl -q vm.swappiness=20
+
+echo "== user + layout"
+id agent >/dev/null 2>&1 || useradd -m -s /bin/bash agent
+mkdir -p /srv/agent /srv/work /srv/templates /srv/lock
+if [ ! -f /etc/agent-worker.env ]; then
+  [ -f "$SRC/agent-worker.env" ] || { echo "missing /etc/agent-worker.env (or $SRC/agent-worker.env)"; exit 1; }
+  install -m 600 -o root -g root "$SRC/agent-worker.env" /etc/agent-worker.env
+fi
+install -m 755 "$SRC/worker.mjs" /srv/agent/worker.mjs
+install -m 755 "$SRC/run-tests" /srv/templates/run-tests
+rm -rf /srv/templates/ts.new /srv/templates/py.new
+cp -r "$SRC/templates/ts" /srv/templates/ts.new && rm -rf /srv/templates/ts.new/node_modules
+[ -d /srv/templates/ts/node_modules ] && mv /srv/templates/ts/node_modules /srv/templates/ts.new/node_modules || true
+rm -rf /srv/templates/ts && mv /srv/templates/ts.new /srv/templates/ts
+cp -r "$SRC/templates/py" /srv/templates/py.new
+[ -d /srv/templates/py/.venv ] && mv /srv/templates/py/.venv /srv/templates/py.new/.venv || true
+rm -rf /srv/templates/py && mv /srv/templates/py.new /srv/templates/py
+
+echo "== opencode $OPENCODE_VERSION"
+if ! command -v opencode >/dev/null || [[ "$(opencode --version 2>/dev/null)" != "$OPENCODE_VERSION" ]]; then
+  npm install -g "opencode-ai@$OPENCODE_VERSION" --no-audit --no-fund >/dev/null
+fi
+opencode --version
+
+echo "== template dependencies"
+(cd /srv/templates/ts && npm install --no-audit --no-fund >/dev/null)
+[ -x /srv/templates/py/.venv/bin/pytest ] || { python3 -m venv /srv/templates/py/.venv && /srv/templates/py/.venv/bin/pip install -q -r /srv/templates/py/requirements.txt; }
+
+echo "== opencode config + credential for the agent user"
+install -d -o agent -g agent /home/agent/.config/opencode /home/agent/.local/share/opencode
+cat > /home/agent/.config/opencode/opencode.json <<JSON
+{ "\$schema": "https://opencode.ai/config.json", "model": "$(grep '^OPENCODE_MODEL=' /etc/agent-worker.env | cut -d= -f2- || echo opencode-go/deepseek-v4.1-flash)", "permission": "allow", "share": "disabled", "autoupdate": false }
+JSON
+key="$(grep '^OPENCODE_API_KEY=' /etc/agent-worker.env | cut -d= -f2-)"
+[ -n "$key" ] || { echo "OPENCODE_API_KEY missing in /etc/agent-worker.env"; exit 1; }
+printf '{"opencode-go":{"type":"api","key":"%s"}}\n' "$key" > /home/agent/.local/share/opencode/auth.json
+chmod 600 /home/agent/.local/share/opencode/auth.json
+chown -R agent:agent /srv/work /srv/templates /srv/lock /home/agent
+
+echo "== systemd"
+install -m 644 "$SRC/agent-worker@.service" /etc/systemd/system/agent-worker@.service
+systemctl daemon-reload
+systemctl enable --now agent-worker@1 agent-worker@2
+systemctl restart agent-worker@1 agent-worker@2
+sleep 3
+systemctl --no-pager --lines=3 status agent-worker@1 agent-worker@2 || true
+echo "== done. Logs: journalctl -u agent-worker@1 -u agent-worker@2 -f"

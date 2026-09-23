@@ -1,77 +1,63 @@
 # yuke-persistent-agent-flow
 
-Two **persistent, self-scheduling agents** running 24/7 on a personal free Cloudflare account, using **DeepSeek V4.1 Flash through the $10/month OpenCode Go subscription**, managed by a **Claude orchestrator** that runs every 6 hours. Built for the team ask: *"everyone runs persistent agents with little oversight, on deepseek-flash-4-1, via OpenCode Go."*
+A **task board** where a **Claude manager** plans and reviews work and **two DeepSeek V4.1 Flash workers** execute it around the clock. Built for the team ask: *"everyone runs two persistent agents with little oversight, on deepseek-flash-4-1 via OpenCode Go, doing literally anything."*
 
-Live: **https://yuke-persistent-agent-flow.yuke-521.workers.dev** — the Worker's root page shows each agent's last tick, next tick, run count, token spend and notes over days. The plan and architecture diagram live in [docs/PLAN.md](docs/PLAN.md).
+Live board: **https://yuke-persistent-agent-flow.yuke-521.workers.dev**
 
-## In plain words
+## How it works
 
-**Uptime agent.** A loop that never stops. Plain code does the chores: every 60 s it fetches all six apps and compares with last time; every 30 s it takes a deeper timing measurement of one app; once an hour it summarizes the day's latency. Between chores it waits a few seconds and shows what it is waiting on. When a check finds a change, code writes the DOWN / RECOVERED note immediately. DeepSeek is called for a `review` only when something changed or after every 8 checks, to spot patterns (flapping, creeping latency). Code watches constantly; the model reads the results every few minutes or on change.
+```
+Yuke ── edits GOALS.md ──▶ repo ◀── cloned each run ──┐
+                                                       │
+Claude routine (Sonnet 5, every 30 min) ───────────────┼── Bearer ORCHESTRATOR_TOKEN ──▶ Cloudflare Worker: the board
+  plan · dispatch · review · replan                    │                                  (Durable Object + SQLite)
+                                                       │                                  public status page
+GCP e2-micro VM: agent-worker@1, agent-worker@2 ───────┴── Bearer WORKER_TOKEN ─────────▶ claim · heartbeat · submit · deps
+  each task = one fresh `opencode run` (DeepSeek V4.1 Flash via OpenCode Go)
+```
 
-**Weekend scout.** The same never-ending loop, as a pipeline. Code re-reads curated event sites every 6 h, runs one web search roughly every 45 min, reads pages, expires past events and checks the delivery clock every 5 min. DeepSeek is called for each judgement: which search hits to read (`triage`), which events on a page are real and dated (`extract`), what to deliver on Wednesday and Friday (`deliver`), and what to search next when the pipeline runs dry (`plan`). Each model step is small and paced by the dollar budget.
+1. **Goals** live in [GOALS.md](GOALS.md). A human edits that file and nothing else.
+2. **The manager** ([manager/PROMPT.md](manager/PROMPT.md)) is a Claude Code cloud routine. Every 30 minutes it syncs the goals, **reviews** each finished task by running its tests in its own sandbox (accept, send back with concrete fixes, or split), and **plans** new tasks from the goal catalog so the board never runs dry. It writes a small JSON memory to the board and never keeps a transcript.
+3. **The workers** ([worker/](worker/)) are two systemd services on one small VM. Each claims the next ready task (dependencies accepted, spend within pace), builds a workspace from a template, writes `TASK.md`, runs `opencode run --auto --format json` with DeepSeek V4.1 Flash, bundles everything under `out/` plus `out/REPORT.md`, and submits it for review. Leases, heartbeats and attempts make crashes harmless.
+4. **The board** ([src/board.ts](src/board.ts)) is one Durable Object: goals, tasks, deliverables, reviews, events, workers, spend. The public page shows what each worker is doing, the review queue, accepted work, blocked tasks, spend against pace, and what needs a human.
 
-**The manager (Claude).** Every 6 h it reads both agents' activity, spend and think transcripts, then acts: repairs a stalled loop, rewrites a charter that drifts, moves budget between agents, injects tasks, mirrors results to GitHub, and posts a summary with anything that needs a human.
+"Persistent" means the board always has ready tasks and the workers always pull the next one. "Little oversight" means the only human inputs are `GOALS.md` and the *needs a human* list on the page.
 
-## What "persistent" and "constantly working" mean here
-Each agent is a Cloudflare **Durable Object** with its own SQLite memory running a **never-ending work loop**: a segment of work runs for up to ~2 minutes, then arms an alarm one second out, and the next segment continues. Nothing polls it and nothing is lost between segments because every table lives in the object. The loop pulls from a **worklist the agent maintains itself**:
+## Cost
 
-- **code items** run without the model and cost nothing: fetch, probe, read pages, expire, rank, check clocks. They run nonstop.
-- **think items** call DeepSeek V4.1 Flash for judgement (review, triage, extract, deliver, plan). They are paced by a **spend governor**: each agent has a monthly dollar budget (uptime $12, scout $30 by default) and a small bucket that refills at that rate; a think runs when the bucket can pay for it, otherwise the agent keeps doing code work and reports "pacing". Hard stops at 90% of Go's 5-hour / weekly / monthly windows. Every think records its real cost (Go's published prices, peak hours ×2) and the status page shows the bars.
-
-So the agent is always doing something visible, and the model thinks as often as the budget allows. Errors never kill the loop; a failed item is logged and the next segment continues.
-
-## The two agents
-| Agent | Job | Cost profile |
-|---|---|---|
-| **uptime** | Checks all six DeepSpace apps every minute, deep-probes one app every 30 s (time to first byte, size drift, history), rebuilds a 24 h latency report hourly, writes DOWN/RECOVERED notes from code, and thinks (`review`) after changes or every 8 checks; handles manager tasks like "add target X". | code nonstop; ~$12/month of model time |
-| **scout** (Weekend scout) | Continuous pipeline: refresh curated sources → paced web search (~33/day) → `triage` hits → read pages → `extract` dated events into a candidate pool → `deliver` 5–7 picks Wed 18:00 / Fri 12:00 ET (ntfy push) → `plan` new searches when the well runs dry. Learns from 👍/👎. | code nonstop; ~$30/month of model time |
-
-Explored and dropped: CT DMV appointment watching (the scheduler demands name, date of birth, address and a captcha before showing slots — not automatable without personal data); Global Entry slot watching (feasible via the public CBP scheduler JSON, `locationId=14681` for Hartford/Windsor Locks, not wanted for now).
-
-## The orchestrator (the manager)
-A Claude Code cloud routine (see [orchestrator/ROUTINE.md](orchestrator/ROUTINE.md)) runs [orchestrator/PROMPT.md](orchestrator/PROMPT.md) every 6 h: health repair, quality review against charters (it can rewrite an agent's charter override), tuning the scout's search profile from your feedback, turning [orchestrator/GOALS.md](orchestrator/GOALS.md) into queue items, opening/closing GitHub outage issues, and escalating only what needs a human. It talks to the Worker through `scripts/orch.sh` (see [docs/orchestrator.md](docs/orchestrator.md)), and can also move budget between agents (`governor`), inject work items (`work-add`) and read the live feed (`activity`).
-
-**How you steer it** (everything lands in the Worker's feedback mailbox, read on the next run):
-- the private picks page with 👍/👎 buttons and a text box: `scripts/orch.sh picks-link`
-- `scripts/orch.sh feedback "more outdoors, fewer coffee things"`
-- a plain-text comment on the **Weekend picks** or **Team log** GitHub issue
-- editing `orchestrator/GOALS.md`
-- for "act now": `scripts/orch.sh manager-now`
+| Item | Monthly |
+|---|---|
+| OpenCode Go (the workers' model) | $10, with a $60 usage allowance; the board paces spend at $1.60/day by default (`scripts/board.sh pace`) |
+| GCP e2-micro (free tier) + external IPv4 | about $3.65 |
+| Cloudflare Worker + Durable Object | $0 (free tier; the board reads about 50k rows/day of the 5M allowed) |
+| Claude manager | on the existing Claude plan |
 
 ## Setup
+
 ```bash
 npm install
-npm run setup:env        # copies the OpenCode Go key from ~/.local/share/opencode/auth.json, generates tokens, prompts for the Tavily key
+npm run setup:env        # generates ORCHESTRATOR_TOKEN + WORKER_TOKEN into .dev.vars, and worker/agent-worker.env for the VM
+npm run check            # typecheck
 npm run dev              # http://localhost:8787
-```
-Requirements outside this repo: an OpenCode Go subscription (`opencode auth login`, and in the OpenCode dashboard set the workspace **Privacy → region to Global**, which DeepSeek V4.1 Flash requires), a free Tavily key, optionally a Ticketmaster key and the ntfy app subscribed to the generated topic.
-
-## Deploy
-```bash
-npx wrangler whoami      # must be the personal account
-npm run secrets:push     # pushes .dev.vars as Worker secrets
+npm run secrets:push     # pushes .dev.vars to the Worker
 npm run deploy
 ```
-Open the Worker URL once; the agents bootstrap their first alarm on first contact.
+Workers: see [worker/README.md](worker/README.md) (three gcloud commands). Manager: see [manager/ROUTINE.md](manager/ROUTINE.md).
 
-## Cost bounds
-| Bound | Value |
-|---|---|
-| Model budget | uptime $12/month, scout $30/month (governor; sum kept ≤ $45 of Go's $60) |
-| Tool steps / think | 6 (`MAX_STEPS`), 1,500 output tokens |
-| Subrequests / segment | ≤ 40 (free plan allows 50 per invocation) |
-| Idle gap | ≥ 30 s (keeps DO row writes under the free plan's 100k/day) |
-| Tavily | ≤ 33 searches/day (1,000 free/month) |
-| Cloudflare | free plan; a few hundred requests/day |
-| Orchestrator | 4 short Claude runs/day |
+## Day to day
+
+- `scripts/board.sh status` — the whole board in one screen; `scripts/board.sh` alone lists every command (tasks, task, accept, reject, tasks-add, pace, needs-human, events…).
+- `scripts/monitor.sh` — one-shot health snapshot with anomalies.
+- `scripts/board.sh manager-now` — run the manager loop from a laptop instead of waiting for the routine.
+- Edit [GOALS.md](GOALS.md) and push: the next manager run picks it up.
 
 ## Layout
+
 ```
-charters/        standing instructions per agent (imported into the system prompt)
-orchestrator/    PROMPT.md (the manager loop), GOALS.md (yours), apps.json (url → repo), ROUTINE.md
-scripts/         setup-env.mjs, orch.sh
-src/agents/      base-agent.ts (tick loop, scheduling, memory, budgets), uptime-agent.ts, weekend-scout-agent.ts
-src/tools/       http (counted fetch), search (Tavily), reader (Jina), ticketmaster, notify (ntfy), time, common (note/queue/finish tools)
-src/             index.ts (router), admin.ts, team-state.ts (mailbox + log), status-page.ts, picks-page.ts, llm.ts, rpc.ts, types.ts
-docs/            PLAN.md, orchestrator.md
+GOALS.md            the goals (Goal A: TypeScript algorithms library; Goal B: Python port + differential cross-checks)
+manager/            PROMPT.md (the manager loop), ROUTINE.md (how the routine is configured)
+worker/             worker.mjs (the loop), install.sh (VM bootstrap), agent-worker@.service, templates/, run-tests, README.md
+scripts/            board.sh (CLI), monitor.sh, setup-env.mjs
+src/                index.ts (router), board.ts (Durable Object), pages.ts (status + task pages), util.ts, types.ts
+docs/               PLAN.md (design), HANDOFF.md (state for the next session)
 ```
