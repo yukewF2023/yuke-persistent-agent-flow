@@ -615,7 +615,14 @@ export abstract class BaseAgent extends Agent<Env> {
           results: s.toolResults.map((r) => ({ tool: r.toolName, output: JSON.stringify(r.output).slice(0, 500) }))
         }))
       );
-      const decision = ctx.decision as Decision | null;
+      let decision = ctx.decision as Decision | null;
+      if (!decision) {
+        // On the forced last step the SDK records the finish call but does not execute it; recover the decision from the call.
+        for (const st of result.steps) for (const c of st.toolCalls) if (c.toolName === "finish") {
+          const inp = c.input as { summary?: string; reason?: string };
+          if (inp?.summary) decision = { summary: String(inp.summary), reason: String(inp.reason ?? "") };
+        }
+      }
       summary = decision?.summary ?? (result.text || "no finish call").slice(0, 300);
       if (!decision) error = `no finish call (finishReason=${result.finishReason})`;
     } catch (err) {
