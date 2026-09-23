@@ -4,6 +4,14 @@ Two **persistent, self-scheduling agents** running 24/7 on a personal free Cloud
 
 Live: **https://yuke-persistent-agent-flow.yuke-521.workers.dev** — the Worker's root page shows each agent's last tick, next tick, run count, token spend and notes over days. The plan and architecture diagram live in [docs/PLAN.md](docs/PLAN.md).
 
+## In plain words
+
+**Uptime agent.** A loop that never stops. Plain code does the chores: every 60 s it fetches all six apps and compares with last time; every 30 s it takes a deeper timing measurement of one app; once an hour it summarizes the day's latency. Between chores it waits a few seconds and shows what it is waiting on. When a check finds a change, code writes the DOWN / RECOVERED note immediately. DeepSeek is called for a `review` only when something changed or after every 8 checks, to spot patterns (flapping, creeping latency). Code watches constantly; the model reads the results every few minutes or on change.
+
+**Weekend scout.** The same never-ending loop, as a pipeline. Code re-reads curated event sites every 6 h, runs one web search roughly every 45 min, reads pages, expires past events and checks the delivery clock every 5 min. DeepSeek is called for each judgement: which search hits to read (`triage`), which events on a page are real and dated (`extract`), what to deliver on Wednesday and Friday (`deliver`), and what to search next when the pipeline runs dry (`plan`). Each model step is small and paced by the dollar budget.
+
+**The manager (Claude).** Every 6 h it reads both agents' activity, spend and think transcripts, then acts: repairs a stalled loop, rewrites a charter that drifts, moves budget between agents, injects tasks, mirrors results to GitHub, and posts a summary with anything that needs a human.
+
 ## What "persistent" and "constantly working" mean here
 Each agent is a Cloudflare **Durable Object** with its own SQLite memory running a **never-ending work loop**: a segment of work runs for up to ~2 minutes, then arms an alarm one second out, and the next segment continues. Nothing polls it and nothing is lost between segments because every table lives in the object. The loop pulls from a **worklist the agent maintains itself**:
 
