@@ -66,6 +66,9 @@ export function renderStatusPage(s: BoardStatus, now: number): string {
     ${bar("today", sp.todayUsd, sp.paceUsdPerDay)}${bar("5 h", sp.fiveHourUsd, 12)}${bar("week", sp.weekUsd, 30)}${bar("month", sp.monthUsd, 60)}
     <div class="kv"><span>tasks today <b>${sp.todayTasks}</b></span><span>in flight est. <b>${usd(sp.inflightEstimateUsd)}</b></span><span>daily pace <b>${usd(sp.paceUsdPerDay)}</b></span></div>
     ${sp.pacing ? `<span class="pill warn">pacing</span> <span class="muted">${esc(sp.pacing.reason)}</span>` : `<span class="pill ok">within pace</span>`}
+    <h3>Cloudflare free tier today</h3>
+    <div class="bar"><span>reads</span><div class="track"><div class="fill ${s.cloudflare.reads / s.cloudflare.readLimit > 0.8 ? "hot" : ""}" style="width:${Math.min(100, (100 * s.cloudflare.reads) / s.cloudflare.readLimit).toFixed(1)}%"></div></div><b>${s.cloudflare.reads.toLocaleString()} / ${(s.cloudflare.readLimit / 1e6).toFixed(0)}M</b></div>
+    <div class="bar"><span>writes</span><div class="track"><div class="fill ${s.cloudflare.writes / s.cloudflare.writeLimit > 0.8 ? "hot" : ""}" style="width:${Math.min(100, (100 * s.cloudflare.writes) / s.cloudflare.writeLimit).toFixed(1)}%"></div></div><b>${s.cloudflare.writes.toLocaleString()} / ${(s.cloudflare.writeLimit / 1e3).toFixed(0)}k</b></div>
   </section>
   <section class="card"><h2>Manager <small>Claude routine</small></h2>
     <div class="kv"><span>last run <b>${s.manager.lastRunAt ? ago(s.manager.lastRunAt, now) : "never"}</b></span><span>${s.manager.lockedUntil ? `<span class="pill accent">running now</span>` : ""}</span></div>

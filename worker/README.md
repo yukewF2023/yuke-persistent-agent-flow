@@ -29,6 +29,9 @@ then browse http://localhost:4096 (leave the command running; Ctrl-C closes the 
 
 Optional public transcript links: set `OPENCODE_SHARE=auto` in `worker/agent-worker.env`, re-run the install, and every task page on the board gets a "worker session transcript" link (opencode.ai share pages are public; the task content is open-source algorithm code).
 
+## Backups
+A root cron job runs `/usr/local/bin/board-backup` daily at 01:17 UTC: it downloads the whole board (goals, tasks, deliverables, reviews, events, manager memory) to `/srv/backups/board-<date>.json` and keeps 14 days. Run it by hand with `sudo board-backup`. Restoring is manual: the export is plain JSON that `scripts/board.sh tasks-add` and `goals-sync` can be fed from.
+
 ## Operate
 ```bash
 gcloud compute ssh agent-workers --zone=us-east1-b -- 'sudo journalctl -u agent-worker@1 -u agent-worker@2 -f'

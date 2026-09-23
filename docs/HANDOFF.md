@@ -6,6 +6,11 @@
 - Secrets: `.dev.vars` holds ORCHESTRATOR_TOKEN and WORKER_TOKEN (pushed to the Worker); `worker/agent-worker.env` (gitignored) holds BOARD_URL, WORKER_TOKEN, OPENCODE_API_KEY for the VM.
 - Health: `scripts/monitor.sh` (anomalies) and `scripts/board.sh status`.
 
+## Cloudflare free-tier budget
+- Limits: 5M row reads and 100k row writes per day, reset 00:00 UTC. The old design blew this on 2026-09-23 (per-segment pruning). The board now meters its own reads/writes (`scripts/board.sh status`, the status page, `GET /manager/meter`), keeps spend as running totals, caches the page 60 s, and stops handing out tasks above 4.5M reads so the page stays reachable.
+- Measured: idle claim 18 reads / 2 writes; heartbeat 1 / 1; uncached page render 53 reads; manager list+queue+memory 7 reads. Expected day: 50k–200k reads, under 15k writes.
+- Backups: `/srv/backups/board-<date>.json` on the VM, daily 01:17 UTC, 14 days kept (`sudo board-backup` to run now).
+
 ## Known limits
 - e2-micro has 1 GB RAM: test runs are serialized through `./run-tests` (flock) and each worker has MemoryMax=450M. If the journal shows OOM kills, run one worker (`systemctl disable --now agent-worker@2`) or move to e2-small.
 - The routine API refuses sub-hourly crons, so the manager is two hourly routines (:13 and :43) sharing the board's lock; see manager/ROUTINE.md.

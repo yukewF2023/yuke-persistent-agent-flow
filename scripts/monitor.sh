@@ -18,6 +18,11 @@ print("spend: today $%.2f / $%.2f pace · week $%.2f · month $%.2f%s"%(s["today
 if c.get("review",0)>10: anom.append("review queue %d (manager falling behind?)"%c["review"])
 if c.get("blocked",0): anom.append("%d blocked task(s)"%c["blocked"])
 if s["monthUsd"]>54: anom.append("month spend $%.2f near Go cap"%s["monthUsd"])
+cf=d.get("cloudflare") or {}
+if cf:
+    print("cloudflare today: rows read %s / %s · written %s / %s"%(f"{cf['reads']:,}",f"{cf['readLimit']:,}",f"{cf['writes']:,}",f"{cf['writeLimit']:,}"))
+    if cf["reads"]>0.7*cf["readLimit"]: anom.append("DO reads at %d%% of the daily free-tier limit"%(100*cf["reads"]/cf["readLimit"]))
+    if cf["writes"]>0.7*cf["writeLimit"]: anom.append("DO writes at %d%% of the daily free-tier limit"%(100*cf["writes"]/cf["writeLimit"]))
 m=d["manager"]; print("manager: last run %s"%ago(m["lastRunAt"]))
 if not m["lastRunAt"] or now-m["lastRunAt"]>2*3600000: anom.append("manager last run %s (expected every 30 min)"%ago(m["lastRunAt"]))
 if d["needsHuman"]: print("needs human:"); [print("  - "+n["text"]) for n in d["needsHuman"]]

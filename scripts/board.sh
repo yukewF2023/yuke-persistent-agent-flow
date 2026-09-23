@@ -42,6 +42,8 @@ print("BLOCKED")
 for t in d["blocked"]: print("  #%d %s: %s"%(t["id"],t["key"],(t.get("last_error") or "")[:120]))
 print("NEEDS HUMAN"); [print("  - "+n["text"]) for n in d["needsHuman"]]
 m=d["manager"]; print("MANAGER last run %s%s"%(ago(m["lastRunAt"])," · LOCKED" if m["lockedUntil"] else ""))
+cf=d.get("cloudflare") or {}
+if cf: print("CLOUDFLARE rows today: read %s / %s · written %s / %s"%(f"{cf['reads']:,}",f"{cf['readLimit']:,}",f"{cf['writes']:,}",f"{cf['writeLimit']:,}"))
 print("EVENTS"); [print("  %s %s %s"%(time.strftime("%m-%d %H:%MZ",time.gmtime(e["ts"]/1000)),e["kind"],e["text"][:140])) for e in d["events"][:12]]
 ' ;;
   raw)           curl -sS "$WORKER_URL/api/status" | j ;;

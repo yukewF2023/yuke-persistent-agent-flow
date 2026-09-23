@@ -14,7 +14,7 @@ Think of a small team with one manager and two junior engineers who never sleep.
 - **The board is a Cloudflare Worker.** It is the only shared memory: goals, tasks, who holds what, submitted files, reviews, a log, and spend. Its public page shows all of it live.
 - **Money is the throttle.** Each task's tokens are priced at OpenCode Go rates and the board refuses new claims once the day's spend reaches the pace (default $1.60, about 20 tasks). So "constantly working" means the workers are always either running a task or waiting for budget, never waiting for a human.
 
-Nothing remembers anything between sessions except the board: every opencode session and every manager run starts from scratch and reads the board.
+Nothing remembers anything between sessions except the board: every opencode session and every manager run starts from scratch and reads the board. The board itself is durable SQLite inside a Cloudflare Durable Object, and the VM downloads a full copy every night to `/srv/backups`.
 
 ## Where to look
 
@@ -53,7 +53,7 @@ GCP e2-micro VM: agent-worker@1, agent-worker@2 ───────┴── B
 |---|---|
 | OpenCode Go (the workers' model) | $10, with a $60 usage allowance; the board paces spend at $1.60/day by default (`scripts/board.sh pace`) |
 | GCP e2-micro (free tier) + external IPv4 | about $3.65 |
-| Cloudflare Worker + Durable Object | $0 (free tier; the board reads about 50k rows/day of the 5M allowed) |
+| Cloudflare Worker + Durable Object | $0 (free tier: 5M row reads and 100k writes a day; the board uses well under 1M reads on a busy day, and the status page shows today's usage) |
 | Claude manager | on the existing Claude plan |
 
 ## Setup

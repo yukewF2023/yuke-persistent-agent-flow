@@ -9,7 +9,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 echo "== packages"
 apt-get update -y -qq
-apt-get install -y -qq curl git ca-certificates build-essential python3 python3-venv python3-pip tar gzip util-linux >/dev/null
+apt-get install -y -qq curl git ca-certificates build-essential python3 python3-venv python3-pip tar gzip util-linux cron >/dev/null
 if ! command -v node >/dev/null || [[ "$(node -v)" != v22* ]]; then
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null
   apt-get install -y -qq nodejs >/dev/null
@@ -32,6 +32,12 @@ if [ ! -f /etc/agent-worker.env ]; then
 fi
 install -m 755 "$SRC/worker.mjs" /srv/agent/worker.mjs
 install -m 755 "$SRC/run-tests" /srv/templates/run-tests
+install -m 755 "$SRC/board-backup" /usr/local/bin/board-backup
+mkdir -p /srv/backups
+cat > /etc/cron.d/board-backup <<'CRON'
+# daily board export (see worker/board-backup); runs as root because /etc/agent-worker.env is root-only
+17 1 * * * root /usr/local/bin/board-backup >> /var/log/board-backup.log 2>&1
+CRON
 rm -rf /srv/templates/ts.new /srv/templates/py.new
 cp -r "$SRC/templates/ts" /srv/templates/ts.new && rm -rf /srv/templates/ts.new/node_modules
 [ -d /srv/templates/ts/node_modules ] && mv /srv/templates/ts/node_modules /srv/templates/ts.new/node_modules || true

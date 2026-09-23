@@ -125,4 +125,6 @@ export interface BoardStatus {
   needsHuman: { ts: number; text: string }[];
   events: EventRow[];
   manager: { lastRunAt: number | null; lockedUntil: number | null };
+  /** Durable Object row usage today against the free-tier limits. */
+  cloudflare: { day: string; reads: number; writes: number; readLimit: number; writeLimit: number };
 }

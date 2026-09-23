@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { BoardStatus, DeliverableRow, Env, EventRow, GoalRow, ReviewRow, Role, SpendSummary, TaskRow, TaskStatus, WorkerRow } from "./types";
-import { json, readJson, secondsToUtcMidnight, utcDayStart, utcMonthStart } from "./util";
+import { json, readJson, secondsToUtcMidnight } from "./util";
 
 /** OpenCode Go usage windows in USD (the workers' model provider). */
 const GO_CAPS = { fiveHour: 12, week: 30, month: 60 };
@@ -9,7 +9,12 @@ const DEFAULT_TASK_COST_USD = 0.1;
 const FILES_MAX_BYTES = 800_000;
 const FILES_MAX_COUNT = 200;
 const MEMORY_MAX_BYTES = 16_000;
-const STATUS_CACHE_MS = 10_000;
+const STATUS_CACHE_MS = 60_000;
+/** Cloudflare free-tier daily Durable Object limits; the board degrades gracefully before hitting them. */
+const CF_ROWS_READ_LIMIT = 5_000_000;
+const CF_ROWS_WRITTEN_LIMIT = 100_000;
+const CF_READ_SOFT_LIMIT = 4_500_000;
+const METER_FLUSH_MS = 60_000;
 const TERMINAL: TaskStatus[] = ["accepted", "rejected", "cancelled"];
 
 const num = (v: unknown, d = 0) => (typeof v === "number" && Number.isFinite(v) ? v : Number(v) || d);
@@ -23,6 +28,9 @@ const leaseMs = (t: Pick<TaskRow, "max_minutes">) => Math.max(45, t.max_minutes 
  */
 export class Board extends DurableObject<Env> {
   private statusCache: { at: number; body: string } | null = null;
+  /** Row-read/write meter (Cloudflare free-tier budget). Pending deltas are flushed to kv about once a minute. */
+  private meterPending = { reads: 0, writes: 0 };
+  private meterStored: { day: string; reads: number; writes: number; at: number } | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -31,7 +39,11 @@ export class Board extends DurableObject<Env> {
 
   // ---- sql helpers ----
   private q<T>(sql: string, ...params: (string | number | null)[]): T[] {
-    return this.ctx.storage.sql.exec(sql, ...params).toArray() as unknown as T[];
+    const cursor = this.ctx.storage.sql.exec(sql, ...params);
+    const rows = cursor.toArray() as unknown as T[];
+    this.meterPending.reads += cursor.rowsRead;
+    this.meterPending.writes += cursor.rowsWritten;
+    return rows;
   }
   private one<T>(sql: string, ...params: (string | number | null)[]): T | undefined {
     return this.q<T>(sql, ...params)[0];
@@ -40,7 +52,37 @@ export class Board extends DurableObject<Env> {
   private run(sql: string, ...params: (string | number | null)[]): number {
     const cursor = this.ctx.storage.sql.exec(sql, ...params);
     cursor.toArray();
+    this.meterPending.reads += cursor.rowsRead;
+    this.meterPending.writes += cursor.rowsWritten;
     return cursor.rowsWritten;
+  }
+  private today(now = Date.now()) {
+    return new Date(now).toISOString().slice(0, 10);
+  }
+  /** Today's row usage: the flushed total plus what this isolate has done since. */
+  private meterToday(now = Date.now()) {
+    const day = this.today(now);
+    if (!this.meterStored || this.meterStored.day !== day || now - this.meterStored.at > METER_FLUSH_MS) {
+      const stored = this.kvJson<{ reads: number; writes: number }>(`meter:${day}`) ?? { reads: 0, writes: 0 };
+      this.meterStored = { day, reads: stored.reads, writes: stored.writes, at: now };
+    }
+    return { day, reads: this.meterStored.reads + this.meterPending.reads, writes: this.meterStored.writes + this.meterPending.writes };
+  }
+  private flushMeter(now = Date.now()) {
+    if (this.meterPending.reads + this.meterPending.writes === 0) return;
+    const m = this.meterToday(now);
+    if (this.meterStored && now - this.meterStored.at < METER_FLUSH_MS && this.meterPending.reads < 5_000) return;
+    this.kvSet(`meter:${m.day}`, JSON.stringify({ reads: m.reads, writes: m.writes }));
+    this.meterStored = { day: m.day, reads: m.reads, writes: m.writes, at: now };
+    this.meterPending = { reads: 0, writes: 0 };
+  }
+  /** Spend is kept as running totals per UTC day and month so pacing never sums the spend table. */
+  private addSpend(now: number, taskId: number, attempt: number, usd: number, tokens: number) {
+    this.run("INSERT INTO spend(ts, task_id, attempt, usd, tokens) VALUES (?, ?, ?, ?, ?)", now, taskId, attempt, usd, tokens);
+    for (const key of [`spend:day:${this.today(now)}`, `spend:month:${this.today(now).slice(0, 7)}`]) {
+      const cur = this.kvJson<{ usd: number; tokens: number; tasks: number }>(key) ?? { usd: 0, tokens: 0, tasks: 0 };
+      this.kvSet(key, JSON.stringify({ usd: cur.usd + usd, tokens: cur.tokens + tokens, tasks: cur.tasks + 1 }));
+    }
   }
   private kvGet(key: string): string | null {
     return this.one<{ value: string }>("SELECT value FROM kv WHERE key = ?", key)?.value ?? null;
@@ -111,16 +153,20 @@ export class Board extends DurableObject<Env> {
 
       if (p[0] === "manager") {
         if (role !== "manager") return json({ error: "forbidden" }, 403);
-        return this.manager(request, url, p.slice(1));
+        return await this.manager(request, url, p.slice(1));
       }
       if (p[0] === "worker") {
         if (role !== "worker") return json({ error: "forbidden" }, 403);
-        return this.worker(request, url, p.slice(1));
+        return await this.worker(request, url, p.slice(1));
       }
       return json({ error: "not found" }, 404);
     } catch (err) {
       console.error("board error", err);
       return json({ error: String((err as Error)?.message ?? err) }, 500);
+    } finally {
+      try {
+        this.flushMeter();
+      } catch {}
     }
   }
 
@@ -156,7 +202,8 @@ export class Board extends DurableObject<Env> {
       spend: this.spendSummary(now),
       needsHuman: this.kvJson<{ ts: number; text: string }[]>("needs_human") ?? [],
       events,
-      manager: { lastRunAt: this.kvGet("manager:last_run_at") ? Number(this.kvGet("manager:last_run_at")) : null, lockedUntil: lock > now ? lock : null }
+      manager: { lastRunAt: this.kvGet("manager:last_run_at") ? Number(this.kvGet("manager:last_run_at")) : null, lockedUntil: lock > now ? lock : null },
+      cloudflare: { ...this.meterToday(now), readLimit: CF_ROWS_READ_LIMIT, writeLimit: CF_ROWS_WRITTEN_LIMIT }
     };
     const text = JSON.stringify(body, null, 2);
     this.statusCache = { at: now, body: text };
@@ -185,13 +232,14 @@ export class Board extends DurableObject<Env> {
 
   // ---- spend / pace ----
   private spendSummary(now: number): SpendSummary {
-    const sum = (since: number) => Number(this.one<{ s: number }>("SELECT COALESCE(SUM(usd), 0) AS s FROM spend WHERE ts >= ?", since)?.s ?? 0);
-    const dayStart = utcDayStart(now);
-    const todayUsd = sum(dayStart);
-    const fiveHourUsd = sum(now - 5 * 3600_000);
-    const weekUsd = sum(now - 7 * 86_400_000);
-    const monthUsd = sum(utcMonthStart(now));
-    const todayTasks = Number(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM spend WHERE ts >= ?", dayStart)?.n ?? 0);
+    const dayTotals = (ts: number) => this.kvJson<{ usd: number; tokens: number; tasks: number }>(`spend:day:${this.today(ts)}`) ?? { usd: 0, tokens: 0, tasks: 0 };
+    const today = dayTotals(now);
+    const todayUsd = today.usd;
+    const todayTasks = today.tasks;
+    let weekUsd = 0;
+    for (let d = 0; d < 7; d++) weekUsd += dayTotals(now - d * 86_400_000).usd;
+    const monthUsd = (this.kvJson<{ usd: number }>(`spend:month:${this.today(now).slice(0, 7)}`) ?? { usd: 0 }).usd;
+    const fiveHourUsd = Number(this.one<{ s: number }>("SELECT COALESCE(SUM(usd), 0) AS s FROM spend WHERE ts >= ?", now - 5 * 3600_000)?.s ?? 0);
     const pace = Number(this.kvGet("pace_usd_per_day") ?? DEFAULT_PACE_USD_PER_DAY);
     const inflight = Number(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM tasks WHERE status IN ('claimed','running')")?.n ?? 0);
     const avg = Number(this.one<{ a: number | null }>("SELECT AVG(usd) AS a FROM (SELECT usd FROM spend ORDER BY id DESC LIMIT 10)")?.a ?? 0) || DEFAULT_TASK_COST_USD;
@@ -221,10 +269,27 @@ export class Board extends DurableObject<Env> {
     this.kvSet("needs_human", JSON.stringify(list.slice(-20)));
   }
 
+  /** Full JSON dump for daily backups (called once a day from the VM). */
+  private exportAll(): Response {
+    const now = Date.now();
+    return json({
+      exportedAt: now,
+      goals: this.q<GoalRow>("SELECT * FROM goals ORDER BY id"),
+      tasks: this.q<TaskRow>("SELECT * FROM tasks ORDER BY id LIMIT 5000"),
+      deliverables: this.q<DeliverableRow>("SELECT * FROM deliverables ORDER BY id LIMIT 2000").map((d) => ({ ...d, files: JSON.parse(d.files) })),
+      reviews: this.q<ReviewRow>("SELECT * FROM reviews ORDER BY id LIMIT 5000"),
+      events: this.q<EventRow>("SELECT * FROM events ORDER BY id DESC LIMIT 1000"),
+      workers: this.q<WorkerRow>("SELECT * FROM workers"),
+      spend: this.q<{ ts: number; task_id: number; attempt: number; usd: number; tokens: number }>("SELECT ts, task_id, attempt, usd, tokens FROM spend WHERE ts >= ? ORDER BY id", now - 40 * 86_400_000),
+      kv: Object.fromEntries(this.q<{ key: string; value: string }>("SELECT key, value FROM kv").map((r) => [r.key, r.value]))
+    });
+  }
+
   // ---- worker API ----
   private async worker(request: Request, url: URL, p: string[]): Promise<Response> {
     const m = request.method;
     const now = Date.now();
+    if (m === "GET" && p[0] === "export") return this.exportAll();
     if (m === "POST" && p[0] === "claim") return this.claim(await readJson(request), now);
     if (m === "POST" && p[0] === "heartbeat") return this.heartbeat(await readJson(request), now);
     if (p[0] === "tasks" && p[1]) {
@@ -276,6 +341,11 @@ export class Board extends DurableObject<Env> {
   private claim(body: Record<string, unknown>, now: number): Response {
     const workerId = str(body.worker_id, 80);
     if (!workerId) return json({ error: "worker_id required" }, 400);
+    const meter = this.meterToday(now);
+    if (meter.reads > CF_READ_SOFT_LIMIT) {
+      const reason = `Cloudflare daily row-read budget nearly used (${meter.reads.toLocaleString()} of ${CF_ROWS_READ_LIMIT.toLocaleString()}); resumes 00:00 UTC`;
+      return json({ task: null, reason, retry_after_s: secondsToUtcMidnight(now), pacing: true });
+    }
     this.sweepLeases(now);
     this.upsertWorker(workerId, str(body.host, 120) || null, str(body.version, 40) || null, null, now);
     const spend = this.spendSummary(now);
@@ -371,7 +441,7 @@ export class Board extends DurableObject<Env> {
       now,
       task.id
     );
-    if (cost > 0 || tin + tout > 0) this.run("INSERT INTO spend(ts, task_id, attempt, usd, tokens) VALUES (?, ?, ?, ?, ?)", now, task.id, task.attempt, cost, tin + tout);
+    if (cost > 0 || tin + tout > 0) this.addSpend(now, task.id, task.attempt, cost, tin + tout);
     this.run("UPDATE workers SET task_id = NULL, last_seen = ?, note = ?, tasks_done = tasks_done + 1 WHERE id = ?", now, `submitted ${task.key}`, workerId);
     this.event(`worker:${workerId}`, "task.submit", task.id, `${task.key}: submitted for review (${entries.length} files, ${steps} steps, $${cost.toFixed(3)})`);
     this.touch();
@@ -385,7 +455,7 @@ export class Board extends DurableObject<Env> {
     const exhausted = task.attempt >= task.max_attempts;
     const status = exhausted ? "blocked" : "ready";
     this.run("UPDATE tasks SET status = ?, worker_id = NULL, lease_until = NULL, cost_usd = cost_usd + ?, last_error = ?, updated_at = ? WHERE id = ?", status, cost, error, now, task.id);
-    if (cost > 0 || tokens > 0) this.run("INSERT INTO spend(ts, task_id, attempt, usd, tokens) VALUES (?, ?, ?, ?, ?)", now, task.id, task.attempt, cost, tokens);
+    if (cost > 0 || tokens > 0) this.addSpend(now, task.id, task.attempt, cost, tokens);
     this.run("UPDATE workers SET task_id = NULL, last_seen = ?, note = ?, tasks_failed = tasks_failed + 1 WHERE id = ?", now, `failed ${task.key}`, workerId);
     this.event(`worker:${workerId}`, "task.fail", task.id, `${task.key}: attempt ${task.attempt} failed → ${status}: ${error.slice(0, 200)}`);
     if (exhausted) this.needsHumanAdd(`Task #${task.id} ${task.key} blocked after ${task.attempt} attempts: ${error.slice(0, 160)}`);
@@ -499,6 +569,8 @@ export class Board extends DurableObject<Env> {
       this.kvSet("manager:lock_until", null);
       return json({ ok: true });
     }
+    if (p[0] === "export" && m === "GET") return this.exportAll();
+    if (p[0] === "meter" && m === "GET") return json({ ...this.meterToday(now), readLimit: CF_ROWS_READ_LIMIT, writeLimit: CF_ROWS_WRITTEN_LIMIT });
     if (p[0] === "prune" && m === "POST") {
       const events = this.run("DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT 1000)");
       const spend = this.run("DELETE FROM spend WHERE ts < ?", now - 40 * 86_400_000);

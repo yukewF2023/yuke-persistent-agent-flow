@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Daily backup of the whole board (goals, tasks, deliverables, reviews, events, memory) to /srv/backups. Keeps 14 days.
+set -euo pipefail
+. /etc/agent-worker.env
+mkdir -p /srv/backups
+out="/srv/backups/board-$(date -u +%F).json"
+curl -sS -m 120 -H "Authorization: Bearer $WORKER_TOKEN" "${BOARD_URL%/}/worker/export" -o "$out.tmp" && mv "$out.tmp" "$out"
+find /srv/backups -name 'board-*.json' -mtime +14 -delete
+echo "backup written: $out ($(stat -c %s "$out") bytes)"
