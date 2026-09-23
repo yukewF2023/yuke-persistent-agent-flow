@@ -7,7 +7,7 @@ The manager runs as **two Claude Code cloud routines** that share the board's ma
 
 Both:
 
-- model: claude-sonnet-5; tools: Bash, Read, Write, Glob, Grep
+- model: claude-sonnet-5; tools: Bash, Read, Glob, Grep
 - repo: `yukewF2023/yuke-persistent-agent-flow` (cloned fresh each run, so the prompt, `GOALS.md` and `scripts/board.sh` must be pushed)
 - environment `env_01HUXQno31z13QhWv3CBREm6`: env vars `WORKER_URL` and `ORCHESTRATOR_TOKEN`; network access allows the Worker host (npm and PyPI are on the sandbox's default allowlist)
 - kickoff prompt: check the env vars exist, `chmod +x scripts/board.sh`, then read `manager/PROMPT.md` and follow it
