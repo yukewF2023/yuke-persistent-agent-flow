@@ -28,20 +28,27 @@ export default {
     }
 
     const stub = env.BOARD.get(env.BOARD.idFromName("main"));
-    const internal = (path: string) => stub.fetch(new Request(url.origin + path, { headers: { "x-board-role": "public" } }));
+    /** Fetch from the DO for a public page; a thrown error (e.g. the free-tier read cap during DO startup) becomes an error string. */
+    const internal = async (path: string): Promise<{ status: number; body: unknown; error: string | null }> => {
+      try {
+        const res = await stub.fetch(new Request(url.origin + path, { headers: { "x-board-role": "public" } }));
+        const body = await res.json().catch(() => ({}));
+        return { status: res.status, body, error: res.ok ? null : ((body as { error?: string }).error ?? `HTTP ${res.status}`) };
+      } catch (err) {
+        return { status: 500, body: null, error: String((err as Error)?.message ?? err) };
+      }
+    };
     try {
       if (role === "public" && parts.length === 0) {
-        const res = await internal("/api/status");
-        if (!res.ok) {
-          const err = ((await res.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${res.status}`;
-          return html(renderUnavailable(err), 503);
-        }
-        return html(renderStatusPage((await res.json()) as BoardStatus, Date.now()));
+        const r = await internal("/api/status");
+        if (r.error) return html(renderUnavailable(r.error), 503);
+        return html(renderStatusPage(r.body as BoardStatus, Date.now()));
       }
       if (role === "public" && parts[0] === "tasks" && parts[1]) {
-        const res = await internal(`/api/tasks/${encodeURIComponent(parts[1])}`);
-        if (res.status === 404) return html(renderNotFound(), 404);
-        return html(renderTaskPage((await res.json()) as Parameters<typeof renderTaskPage>[0], Date.now()));
+        const r = await internal(`/api/tasks/${encodeURIComponent(parts[1])}`);
+        if (r.status === 404) return html(renderNotFound(), 404);
+        if (r.error) return html(renderUnavailable(r.error), 503);
+        return html(renderTaskPage(r.body as Parameters<typeof renderTaskPage>[0], Date.now()));
       }
       const headers = new Headers(request.headers);
       headers.delete("authorization");
