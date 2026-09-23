@@ -87,6 +87,10 @@ export abstract class BaseAgent extends Agent<Env> {
   protected memoryDigestExtra(): string[] {
     return [];
   }
+  /** Actions the model may plan for itself. Anything else (e.g. clock-driven `deliver`) is reserved for code/seedWork. */
+  protected plannableActions(): string[] {
+    return [];
+  }
   /** What to show while no work item is due (e.g. "watching: next check in 40s"). */
   protected idleLabel(): string {
     return "waiting for the next scheduled work";
@@ -651,7 +655,16 @@ export abstract class BaseAgent extends Agent<Env> {
         inputSchema: z.object({
           items: z.array(z.object({ kind: z.enum(["code", "think"]), action: z.string().min(2).max(60), args: z.record(z.string(), z.any()).optional(), priority: z.number().int().min(1).max(9).default(5) })).min(1).max(12)
         }),
-        execute: async ({ items }) => ({ added: items.map((it) => this.addWork(it.kind, it.action, it.args ?? null, it.priority, `think#${ctx.runId}`)) })
+        execute: async ({ items }) => {
+          const allowed = this.plannableActions();
+          const added: number[] = [];
+          const rejected: string[] = [];
+          for (const it of items) {
+            if (allowed.length && !allowed.includes(it.action)) rejected.push(`${it.action} (not plannable; allowed: ${allowed.join(", ")})`);
+            else added.push(this.addWork(it.kind, it.action, it.args ?? null, it.priority, `think#${ctx.runId}`));
+          }
+          return { added, rejected };
+        }
       }),
       drop_work: tool({
         description: "Drop an open work item that is no longer useful.",

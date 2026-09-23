@@ -83,6 +83,9 @@ export class UptimeAgent extends BaseAgent {
     return [`Targets: ${rows.length} watched, ${down.length} down${down.length ? ` (${down.map((d) => new URL(d.url).host).join(", ")})` : ""}, clean streak ${this.kvGet("clean_streak") ?? 0}, checks today ${this.kvGet(`checks:${new Date().toISOString().slice(0, 10)}`) ?? 0}.`];
   }
 
+  protected plannableActions() {
+    return ["check_all", "deep_probe", "latency_report", "review"];
+  }
   protected idleLabel(): string {
     const now = Date.now();
     const c = Math.max(0, Math.round((CHECK_EVERY_MS - (now - Number(this.kvGet("last_check_at") ?? 0))) / 1000));

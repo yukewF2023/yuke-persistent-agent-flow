@@ -185,6 +185,9 @@ export class WeekendScoutAgent extends BaseAgent {
     return lines;
   }
 
+  protected plannableActions() {
+    return ["search", "read_page", "refresh_source", "expire_and_tidy", "check_delivery", "triage", "extract", "plan"];
+  }
   protected idleLabel(): string {
     const p = this.profile();
     const gap = Math.ceil(86_400_000 / Math.max(1, this.tavilyCap()));
