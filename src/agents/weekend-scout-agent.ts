@@ -4,9 +4,9 @@ import charter from "../../charters/weekend-scout.md";
 import { BaseAgent, type Observation, type TickCtx } from "./base-agent";
 import { tavilySearch } from "../tools/search";
 import { readPage } from "../tools/reader";
-import { ticketmasterEvents } from "../tools/ticketmaster";
 import { notify } from "../tools/notify";
 import { fmtInZone, nextDelivery, partsInZone, upcomingWeekends } from "../tools/time";
+import type { WorkItem } from "../types";
 
 export interface SearchProfile {
   home: string;
@@ -19,9 +19,7 @@ export interface SearchProfile {
   deliver: string[];
   tz: string;
   tavily_daily_cap?: number;
-  research_ticks_per_day?: number;
 }
-
 export interface Candidate {
   id: number;
   url: string;
@@ -45,8 +43,28 @@ export interface Rating {
   reason: string | null;
   ts: number;
 }
+interface PageRow {
+  id: number;
+  url: string;
+  url_norm: string;
+  fetched_at: number;
+  text: string;
+  source: string;
+  status: string;
+}
+interface SearchRow {
+  id: number;
+  query: string;
+  ts: number;
+  hits: string;
+  status: string;
+}
 
 const DELIVER_EARLY_MS = 10 * 60_000;
+const SOURCE_REFRESH_MS = 6 * 3600_000;
+const TIDY_EVERY_MS = 3600_000;
+const DELIVERY_CHECK_MS = 5 * 60_000;
+const PLAN_EVERY_MS = 2 * 3600_000;
 
 function normUrl(u: string) {
   try {
@@ -63,7 +81,7 @@ export class WeekendScoutAgent extends BaseAgent {
   readonly agentId = "scout" as const;
   readonly displayName = "Weekend scout";
   readonly baseCharter = charter;
-  wakeBounds = { min: 300, max: 12 * 3600 };
+  readonly defaultMonthlyBudgetUsd = 30;
 
   protected ensureExtraSchema() {
     this.ctx.storage.sql.exec(`
@@ -72,6 +90,9 @@ export class WeekendScoutAgent extends BaseAgent {
         score REAL NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'new', recommended_at INTEGER);
       CREATE INDEX IF NOT EXISTS candidates_status ON candidates(status, when_start);
       CREATE TABLE IF NOT EXISTS feedback (id INTEGER PRIMARY KEY AUTOINCREMENT, candidate_id INTEGER NOT NULL, rating TEXT NOT NULL, reason TEXT, ts INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS pages (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL, url_norm TEXT NOT NULL, fetched_at INTEGER NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'new');
+      CREATE INDEX IF NOT EXISTS pages_norm ON pages(url_norm, fetched_at DESC);
+      CREATE TABLE IF NOT EXISTS searches (id INTEGER PRIMARY KEY AUTOINCREMENT, query TEXT NOT NULL, ts INTEGER NOT NULL, hits TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'new');
     `);
   }
 
@@ -88,7 +109,7 @@ export class WeekendScoutAgent extends BaseAgent {
     return Number(this.kvGet(`tavily_used:${this.localToday(tz)}`) ?? 0);
   }
   private tavilyCap() {
-    return this.profile().tavily_daily_cap ?? 25;
+    return this.profile().tavily_daily_cap ?? 33;
   }
 
   // ---- candidates ----
@@ -101,19 +122,12 @@ export class WeekendScoutAgent extends BaseAgent {
     }
     this.sql`INSERT INTO candidates(url, url_norm, title, when_start, when_end, place, price, category, summary, source, first_seen, score) VALUES (${c.url}, ${urlNorm}, ${c.title.slice(0, 200)}, ${c.when_start ?? null}, ${c.when_end ?? null}, ${c.place ?? null}, ${c.price ?? null}, ${c.category ?? null}, ${c.summary ? c.summary.slice(0, 400) : null}, ${c.source ?? null}, ${Date.now()}, ${c.score ?? 0})`;
     const id = Number(this.sql<{ id: number }>`SELECT last_insert_rowid() AS id`[0]?.id ?? 0);
+    this.activity("candidate", `new candidate: ${c.title} (${c.when_start ?? "?"})`);
     return { id, created: true, status: "new" as const };
   }
   listCandidates(status?: string, limit = 50): Candidate[] {
-    return status
-      ? this.sql<Candidate>`SELECT * FROM candidates WHERE status = ${status} ORDER BY when_start ASC, score DESC LIMIT ${limit}`
-      : this.sql<Candidate>`SELECT * FROM candidates ORDER BY id DESC LIMIT ${limit}`;
+    return status ? this.sql<Candidate>`SELECT * FROM candidates WHERE status = ${status} ORDER BY when_start ASC, score DESC LIMIT ${limit}` : this.sql<Candidate>`SELECT * FROM candidates ORDER BY id DESC LIMIT ${limit}`;
   }
-  private expireOld(tz: string) {
-    const today = this.localToday(tz);
-    this.sql`UPDATE candidates SET status = 'expired' WHERE status = 'new' AND when_start IS NOT NULL AND substr(when_start, 1, 10) < ${today}`;
-  }
-
-  // ---- ratings (from the picks page / orchestrator) ----
   rate(candidateId: number, rating: "up" | "down", reason: string | null): { ok: boolean } {
     const c = this.sql<{ id: number; title: string }>`SELECT id, title FROM candidates WHERE id = ${candidateId}`[0];
     if (!c) return { ok: false };
@@ -124,14 +138,10 @@ export class WeekendScoutAgent extends BaseAgent {
   ratings(limit = 30): (Rating & { title: string; category: string | null })[] {
     return this.sql<Rating & { title: string; category: string | null }>`SELECT f.candidate_id, f.rating, f.reason, f.ts, c.title, c.category FROM feedback f JOIN candidates c ON c.id = f.candidate_id ORDER BY f.id DESC LIMIT ${limit}`;
   }
-
-  /** Recent recommendation sets with their picks and ratings (for the picks page). */
   getPicks(limit = 3) {
-    const notes = this.listNotes(limit, "recommendation");
-    return notes.map((n) => {
+    return this.listNotes(limit, "recommendation").map((n) => {
       const meta = (n.meta ? JSON.parse(n.meta) : {}) as { candidate_ids?: number[]; whys?: Record<string, string> };
-      const ids = meta.candidate_ids ?? [];
-      const picks = ids
+      const picks = (meta.candidate_ids ?? [])
         .map((id) => this.sql<Candidate>`SELECT * FROM candidates WHERE id = ${id}`[0])
         .filter(Boolean)
         .map((c) => {
@@ -141,6 +151,13 @@ export class WeekendScoutAgent extends BaseAgent {
       return { note: { id: n.id, ts: n.ts, title: n.title, body: n.body }, picks };
     });
   }
+  setProfile(patch: Partial<SearchProfile>, actor = "orchestrator") {
+    const merged = { ...(this.getConfig<Partial<SearchProfile>>("search_profile") ?? {}), ...patch };
+    this.setConfig({ search_profile: merged }, actor);
+    const v = Number(this.kvGet("profile_version") ?? 0) + 1;
+    this.kvSet("profile_version", String(v));
+    return { version: v, profile: this.profile() };
+  }
 
   protected extraStatus() {
     const p = this.profile();
@@ -149,6 +166,8 @@ export class WeekendScoutAgent extends BaseAgent {
       profileVersion: Number(this.kvGet("profile_version") ?? 0),
       profile: { home: p.home, radius_min: p.radius_min, categories: p.categories, keywords: p.keywords, exclusions: p.exclusions, budget_max_usd: p.budget_max_usd, deliver: p.deliver, tz: p.tz },
       candidates: counts,
+      pagesUnextracted: Number(this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM pages WHERE status = 'new'`[0]?.n ?? 0),
+      searchesToday: this.tavilyUsed(p.tz),
       tavily: { usedToday: this.tavilyUsed(p.tz), dailyCap: this.tavilyCap() },
       nextDeliveryAt: this.kvGet("due_delivery_at") ? Number(this.kvGet("due_delivery_at")) : null,
       lastDeliveryAt: this.kvGet("last_delivery_at") ? Number(this.kvGet("last_delivery_at")) : null,
@@ -156,131 +175,163 @@ export class WeekendScoutAgent extends BaseAgent {
     };
   }
   protected memoryDigestExtra() {
-    const rs = this.ratings(10);
-    const lines = [];
+    const lines: string[] = [];
+    const rs = this.ratings(8);
     if (rs.length) lines.push("Recent ratings: " + rs.map((r) => `${r.rating === "up" ? "👍" : "👎"} ${r.title}${r.reason ? ` (${r.reason})` : ""}`).join("; "));
-    const rec = this.sql<{ title: string }>`SELECT title FROM candidates WHERE status = 'recommended' ORDER BY recommended_at DESC LIMIT 15`;
+    const rec = this.sql<{ title: string }>`SELECT title FROM candidates WHERE status = 'recommended' ORDER BY recommended_at DESC LIMIT 12`;
     if (rec.length) lines.push("Already recommended (do not repeat): " + rec.map((r) => r.title).join("; "));
+    const known = this.sql<{ title: string; when_start: string | null }>`SELECT title, when_start FROM candidates WHERE status = 'new' ORDER BY when_start LIMIT 15`;
+    if (known.length) lines.push("Candidate pool: " + known.map((k) => `${k.title} (${k.when_start ?? "?"})`).join("; "));
     return lines;
   }
-  setProfile(patch: Partial<SearchProfile>, actor = "orchestrator") {
-    const current = this.getConfig<Partial<SearchProfile>>("search_profile") ?? {};
-    const merged = { ...current, ...patch };
-    this.setConfig({ search_profile: merged }, actor);
-    const v = Number(this.kvGet("profile_version") ?? 0) + 1;
-    this.kvSet("profile_version", String(v));
-    return { version: v, profile: this.profile() };
-  }
 
-  // ---- mode selection ----
-  private decideMode(ctx: TickCtx, p: SearchProfile): { mode: "research" | "deliver" | "quiet"; due: number | null } {
-    const now = ctx.now;
-    const lastDelivery = Number(this.kvGet("last_delivery_at") ?? 0);
-    // The stored slot only matters when we are at (or a little past) it and have not delivered for it yet.
-    const stored = this.kvGet("due_delivery_at") ? Number(this.kvGet("due_delivery_at")) : null;
-    let due = nextDelivery(p.deliver, p.tz, now);
-    if (stored !== null && stored <= now + DELIVER_EARLY_MS && stored >= now - 6 * 3600_000 && lastDelivery < stored - 3600_000) due = stored;
-    this.kvSet("due_delivery_at", due ? String(due) : null);
-    const forced = /deliver/i.test(ctx.reason);
-    const dueNow = due !== null && now >= due - DELIVER_EARLY_MS && lastDelivery < due - 3600_000;
-    if (forced || dueNow) return { mode: "deliver", due };
-    const lp = partsInZone(now, p.tz);
-    const weekday = lp.dow >= 1 && lp.dow <= 5;
-    const daytime = lp.hour >= 7 && lp.hour < 22;
-    const researchToday = Number(this.kvGet(`research_count:${this.localToday(p.tz)}`) ?? 0);
-    const cap = p.research_ticks_per_day ?? 2;
-    if (weekday && daytime && researchToday < cap && this.tavilyUsed(p.tz) < this.tavilyCap()) return { mode: "research", due };
-    if (/research/i.test(ctx.reason) && this.tavilyUsed(p.tz) < this.tavilyCap()) return { mode: "research", due };
-    return { mode: "quiet", due };
-  }
-
-  protected async observe(ctx: TickCtx): Promise<Observation> {
+  protected idleLabel(): string {
     const p = this.profile();
-    this.expireOld(p.tz);
-    const { mode, due } = this.decideMode(ctx, p);
-    ctx.scratch.mode = mode;
-    ctx.scratch.due = due;
+    const gap = Math.ceil(86_400_000 / Math.max(1, this.tavilyCap()));
+    const s = Math.max(0, Math.round((gap - (Date.now() - Number(this.kvGet("last_search_at") ?? 0))) / 1000));
+    const due = this.kvGet("due_delivery_at") ? fmtInZone(Number(this.kvGet("due_delivery_at")), p.tz) : "?";
+    return `curating · next search in ${Math.round(s / 60)} min · searches today ${this.tavilyUsed(p.tz)}/${this.tavilyCap()} · next delivery ${due}`;
+  }
+
+  // ---- worklist seeding ----
+  protected seedWork(_ctx: TickCtx) {
+    const p = this.profile();
+    const now = Date.now();
+    if (now - Number(this.kvGet("last_tidy_at") ?? 0) >= TIDY_EVERY_MS) this.addWork("code", "expire_and_tidy", null, 3);
+    if (now - Number(this.kvGet("last_delivery_check_at") ?? 0) >= DELIVERY_CHECK_MS) this.addWork("code", "check_delivery", null, 1);
+    // pages waiting for extraction → think
+    for (const pg of this.sql<{ id: number }>`SELECT id FROM pages WHERE status = 'new' ORDER BY id LIMIT 3`) this.addWork("think", "extract", { page_id: pg.id }, 4);
+    // searches waiting for triage → think
+    for (const s of this.sql<{ id: number }>`SELECT id FROM searches WHERE status = 'new' ORDER BY id LIMIT 3`) this.addWork("think", "triage", { search_id: s.id }, 4);
+    // curated sources, staggered
+    for (const src of p.sources) {
+      const last = this.sql<{ fetched_at: number }>`SELECT fetched_at FROM pages WHERE url_norm = ${normUrl(src)} ORDER BY fetched_at DESC LIMIT 1`[0]?.fetched_at ?? 0;
+      if (now - last >= SOURCE_REFRESH_MS) this.addWork("code", "refresh_source", { url: src }, 5);
+    }
+    // paced searches from the keyword rotation
+    const searchGap = Math.ceil(86_400_000 / Math.max(1, this.tavilyCap()));
+    if (this.env.TAVILY_API_KEY && this.tavilyUsed(p.tz) < this.tavilyCap() && now - Number(this.kvGet("last_search_at") ?? 0) >= searchGap) {
+      const planned = this.kvJson<string[]>("planned_queries") ?? [];
+      const q = planned.length ? planned[0] : p.keywords[Number(this.kvGet("kw_idx") ?? 0) % Math.max(1, p.keywords.length)];
+      if (q) this.addWork("code", "search", { query: q }, 5);
+    }
+    if (now - Number(this.kvGet("last_plan_at") ?? 0) >= PLAN_EVERY_MS) this.addWork("think", "plan", null, 6);
+  }
+
+  protected async runCode(action: string, args: Record<string, unknown>, ctx: TickCtx): Promise<string> {
+    const p = this.profile();
+    switch (action) {
+      case "expire_and_tidy": {
+        const today = this.localToday(p.tz);
+        const r = this.sql`UPDATE candidates SET status = 'expired' WHERE status = 'new' AND when_start IS NOT NULL AND substr(when_start, 1, 10) < ${today}`;
+        this.sql`DELETE FROM pages WHERE id NOT IN (SELECT id FROM pages ORDER BY id DESC LIMIT 200)`;
+        this.sql`DELETE FROM searches WHERE id NOT IN (SELECT id FROM searches ORDER BY id DESC LIMIT 200)`;
+        this.kvSet("last_tidy_at", String(Date.now()));
+        void r;
+        return `expired past candidates; pool: ${this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM candidates WHERE status = 'new'`[0]?.n ?? 0} new`;
+      }
+      case "check_delivery": {
+        const now = Date.now();
+        this.kvSet("last_delivery_check_at", String(now));
+        const lastDelivery = Number(this.kvGet("last_delivery_at") ?? 0);
+        const stored = this.kvGet("due_delivery_at") ? Number(this.kvGet("due_delivery_at")) : null;
+        let due = nextDelivery(p.deliver, p.tz, now);
+        if (stored !== null && stored <= now + DELIVER_EARLY_MS && stored >= now - 6 * 3600_000 && lastDelivery < stored - 3600_000) due = stored;
+        this.kvSet("due_delivery_at", due ? String(due) : null);
+        if (due !== null && now >= due - DELIVER_EARLY_MS && lastDelivery < due - 3600_000) {
+          this.addWork("think", "deliver", null, 1);
+          return `delivery due (${fmtInZone(due, p.tz)}) → queued deliver`;
+        }
+        return `next delivery ${due ? fmtInZone(due, p.tz) : "unset"}`;
+      }
+      case "refresh_source":
+      case "read_page": {
+        const url = String(args.url ?? "");
+        if (!/^https?:\/\//.test(url)) throw new Error("bad url");
+        if (ctx.budget.remaining < 3) throw new Error("fetch budget exhausted this segment");
+        const r = await readPage(ctx.fetch, url, { tavilyKey: this.env.TAVILY_API_KEY, maxChars: 6000 });
+        this.sql`INSERT INTO pages(url, url_norm, fetched_at, text, source, status) VALUES (${url}, ${normUrl(url)}, ${Date.now()}, ${r.content}, ${action === "refresh_source" ? "source" : "search"}, 'new')`;
+        const id = Number(this.sql<{ id: number }>`SELECT last_insert_rowid() AS id`[0]?.id ?? 0);
+        this.addWork("think", "extract", { page_id: id }, 4);
+        return `read ${new URL(url).host} (${r.content.length} chars via ${r.via}) → page #${id} queued for extraction`;
+      }
+      case "search": {
+        const query = String(args.query ?? "");
+        if (!this.env.TAVILY_API_KEY) throw new Error("TAVILY_API_KEY not configured");
+        if (this.tavilyUsed(p.tz) >= this.tavilyCap()) return `search cap reached (${this.tavilyCap()}/day); skipped "${query}"`;
+        if (ctx.budget.remaining < 3) throw new Error("fetch budget exhausted this segment");
+        this.kvSet(`tavily_used:${this.localToday(p.tz)}`, String(this.tavilyUsed(p.tz) + 1));
+        this.kvSet("last_search_at", String(Date.now()));
+        const planned = this.kvJson<string[]>("planned_queries") ?? [];
+        if (planned[0] === query) this.kvSet("planned_queries", JSON.stringify(planned.slice(1)));
+        else this.kvSet("kw_idx", String(Number(this.kvGet("kw_idx") ?? 0) + 1));
+        const hits = await tavilySearch(ctx.fetch, this.env.TAVILY_API_KEY, query, { maxResults: 6 });
+        this.sql`INSERT INTO searches(query, ts, hits, status) VALUES (${query}, ${Date.now()}, ${JSON.stringify(hits)}, 'new')`;
+        const id = Number(this.sql<{ id: number }>`SELECT last_insert_rowid() AS id`[0]?.id ?? 0);
+        this.addWork("think", "triage", { search_id: id }, 4);
+        return `"${query}" → ${hits.length} hits → search #${id} queued for triage`;
+      }
+      default:
+        throw new Error(`unknown code action ${action}`);
+    }
+  }
+
+  protected async thinkContext(item: WorkItem, ctx: TickCtx): Promise<Observation> {
+    const p = this.profile();
+    const args = item.args ? (JSON.parse(item.args) as Record<string, unknown>) : {};
     const weekends = upcomingWeekends(p.tz, ctx.now);
-    const counts = Object.fromEntries(this.sql<{ status: string; n: number }>`SELECT status, COUNT(*) AS n FROM candidates GROUP BY status`.map((r) => [r.status, r.n]));
-    const common = {
-      local_time: fmtInZone(ctx.now, p.tz),
-      weekends,
-      next_delivery: due ? fmtInZone(due, p.tz) : null,
-      tavily: { used_today: this.tavilyUsed(p.tz), cap: this.tavilyCap() },
-      candidates: counts
-    };
-    if (mode === "research") {
-      this.kvSet(`research_count:${this.localToday(p.tz)}`, String(Number(this.kvGet(`research_count:${this.localToday(p.tz)}`) ?? 0) + 1));
-      const known = this.listCandidates("new", 12).map((c) => ({ id: c.id, title: c.title, when: c.when_start, category: c.category }));
-      return {
-        mode,
-        data: { ...common, profile: { home: p.home, radius_min: p.radius_min, categories: p.categories, keywords: p.keywords, exclusions: p.exclusions, budget_max_usd: p.budget_max_usd, sources: p.sources }, known_candidates: known },
-        hints: [
-          "Run 4–8 web_search queries (rotate keywords, add season/holiday angles), read 2–4 promising pages, and candidate_upsert real dated events on the upcoming weekends AS YOU GO (max 3 upserts per step; never save everything in one final step).",
-          "Do not upsert without a date and a place. Candidates the tool reports as already known need no further work."
-        ]
-      };
+    const common = { local_time: fmtInZone(ctx.now, p.tz), weekends, profile: { home: p.home, radius_min: p.radius_min, categories: p.categories, exclusions: p.exclusions, budget_max_usd: p.budget_max_usd } };
+    if (item.action === "extract") {
+      const pg = this.sql<PageRow>`SELECT * FROM pages WHERE id = ${Number(args.page_id)}`[0];
+      if (pg) this.sql`UPDATE pages SET status = 'extracted' WHERE id = ${pg.id}`;
+      return { mode: "extract", data: { ...common, page: pg ? { id: pg.id, url: pg.url, fetched_at: new Date(pg.fetched_at).toISOString(), text: pg.text } : null }, hints: ["Upsert up to 3 real, dated, located items from this page (candidate_upsert). If nothing usable, just finish."] };
     }
-    if (mode === "deliver") {
+    if (item.action === "triage") {
+      const s = this.sql<SearchRow>`SELECT * FROM searches WHERE id = ${Number(args.search_id)}`[0];
+      if (s) this.sql`UPDATE searches SET status = 'triaged' WHERE id = ${s.id}`;
+      const known = new Set(this.sql<{ url_norm: string }>`SELECT url_norm FROM pages`.map((r) => r.url_norm));
+      const hits = s ? (JSON.parse(s.hits) as { title: string; url: string; snippet: string }[]).map((h) => ({ ...h, already_read: known.has(normUrl(h.url)) })) : [];
+      return { mode: "triage", data: { ...common, query: s?.query, hits }, hints: ["plan_work code read_page {url} for the 1–3 most promising dated local results not already read, then finish. Don't read aggregator/list pages unless they clearly hold dated events."] };
+    }
+    if (item.action === "deliver") {
       const pool = this.sql<Candidate>`SELECT * FROM candidates WHERE status = 'new' AND (when_start IS NULL OR substr(when_start,1,10) <= ${weekends.nextSun}) ORDER BY score DESC, when_start ASC LIMIT 30`;
-      return {
-        mode,
-        data: {
-          ...common,
-          pool: pool.map((c) => ({ id: c.id, title: c.title, when: c.when_start, place: c.place, price: c.price, category: c.category, summary: c.summary, url: c.url })),
-          recently_recommended: this.sql<{ title: string }>`SELECT title FROM candidates WHERE status = 'recommended' ORDER BY recommended_at DESC LIMIT 20`.map((r) => r.title)
-        },
-        hints: [
-          pool.length >= 3 ? "Call recommend with 5–7 picks (fewer if the pool is thin; never pad), then finish." : "Pool is thin: you may run up to 4 web_search queries first, upsert what you find, then recommend what is real, then finish.",
-          "After delivering, wake for the next research window (about 43200s)."
-        ]
-      };
+      return { mode: "deliver", data: { ...common, pool: pool.map((c) => ({ id: c.id, title: c.title, when: c.when_start, place: c.place, price: c.price, category: c.category, summary: c.summary })), recently_recommended: this.sql<{ title: string }>`SELECT title FROM candidates WHERE status = 'recommended' ORDER BY recommended_at DESC LIMIT 20`.map((r) => r.title) }, hints: [pool.length >= 3 ? "Call recommend with 5–7 picks (fewer if thin; never pad), then finish." : "Pool is thin: recommend what is real (even 2–3), plan_work a few search items for next time, then finish."] };
     }
-    return { mode, data: common, hints: ["Quiet hours. Just finish with a wake that lands on the next research window (weekday 7:00–22:00 local) or delivery, whichever is sooner."] };
+    if (item.action === "plan") {
+      this.kvSet("last_plan_at", String(ctx.now));
+      const counts = Object.fromEntries(this.sql<{ status: string; n: number }>`SELECT status, COUNT(*) AS n FROM candidates GROUP BY status`.map((r) => [r.status, r.n]));
+      const recentQueries = this.sql<{ query: string }>`SELECT query FROM searches ORDER BY id DESC LIMIT 12`.map((r) => r.query);
+      const byCat = Object.fromEntries(this.sql<{ category: string; n: number }>`SELECT category, COUNT(*) AS n FROM candidates WHERE status = 'new' GROUP BY category`.map((r) => [r.category, r.n]));
+      return { mode: "plan", data: { ...common, keywords: p.keywords, sources: p.sources, candidates: counts, pool_by_category: byCat, recent_queries: recentQueries, searches_today: `${this.tavilyUsed(p.tz)}/${this.tavilyCap()}` }, hints: ["Use set_planned_queries with 2–4 fresh, specific queries covering under-represented categories and the season (new queries only; they run automatically, paced). Optionally plan_work refresh_source for a source worth re-reading. Then finish."] };
+    }
+    if (item.action === "manager_task") return { mode: "manager_task", data: { ...common, task: args }, hints: ["Do the task, then queue_complete or queue_drop, then finish."] };
+    return { mode: item.action, data: common, hints: [] };
   }
 
   protected agentTools(ctx: TickCtx): ToolSet {
     const p = this.profile();
     return {
       web_search: tool({
-        description: "Web search (Tavily). Returns up to 8 results with title, url, snippet. Costs 1 search credit; the daily cap is enforced.",
-        inputSchema: z.object({ query: z.string().min(3).max(200), days: z.number().int().min(1).max(60).optional() }),
-        execute: async ({ query, days }) => {
+        description: "Immediate web search (Tavily, 1 credit, daily cap). Prefer planning `search` code items; use this only when a delivery needs more options right now.",
+        inputSchema: z.object({ query: z.string().min(3).max(200) }),
+        execute: async ({ query }) => {
           if (!this.env.TAVILY_API_KEY) return { error: "TAVILY_API_KEY not configured" };
-          const used = this.tavilyUsed(p.tz);
-          if (used >= this.tavilyCap()) return { error: `daily search cap reached (${used}/${this.tavilyCap()})` };
-          if (ctx.budget.remaining < 3) return { error: "fetch budget exhausted this tick" };
-          this.kvSet(`tavily_used:${this.localToday(p.tz)}`, String(used + 1));
+          if (this.tavilyUsed(p.tz) >= this.tavilyCap()) return { error: "daily search cap reached" };
+          if (ctx.budget.remaining < 3) return { error: "fetch budget exhausted this segment" };
+          this.kvSet(`tavily_used:${this.localToday(p.tz)}`, String(this.tavilyUsed(p.tz) + 1));
           try {
-            return { results: await tavilySearch(ctx.fetch, this.env.TAVILY_API_KEY, query, { maxResults: 6, days }) };
+            return { results: await tavilySearch(ctx.fetch, this.env.TAVILY_API_KEY, query, { maxResults: 6 }) };
           } catch (err) {
             return { error: String((err as Error).message).slice(0, 200) };
           }
         }
       }),
-      read_page: tool({
-        description: "Read a web page as text (truncated to ~12k chars). Use for event pages to get date, place, price. Costs at most 1 search credit when the page needs extraction.",
-        inputSchema: z.object({ url: z.string().url() }),
-        execute: async ({ url }) => {
-          if (ctx.budget.remaining < 3) return { error: "fetch budget exhausted this tick" };
-          try {
-            const r = await readPage(ctx.fetch, url, { tavilyKey: this.env.TAVILY_API_KEY });
-            return { url, via: r.via, content: r.content };
-          } catch (err) {
-            return { error: String((err as Error).message).slice(0, 200) };
-          }
-        }
-      }),
-      events_search: tool({
-        description: "Structured ticketed events in Connecticut from Ticketmaster for a date range (YYYY-MM-DD). Returns [] if not configured.",
-        inputSchema: z.object({ keyword: z.string().max(80).optional(), start: z.string(), end: z.string() }),
-        execute: async ({ keyword, start, end }) => {
-          if (ctx.budget.remaining < 3) return { error: "fetch budget exhausted this tick" };
-          try {
-            return { events: await ticketmasterEvents(ctx.fetch, this.env.TICKETMASTER_API_KEY, { keyword, start: `${start}T00:00:00Z`, end: `${end}T23:59:59Z` }) };
-          } catch (err) {
-            return { error: String((err as Error).message).slice(0, 200) };
-          }
+      set_planned_queries: tool({
+        description: "Queue specific search queries to run automatically (paced by the daily cap). Replaces the planned list.",
+        inputSchema: z.object({ queries: z.array(z.string().min(3).max(120)).min(1).max(6) }),
+        execute: async ({ queries }) => {
+          this.kvSet("planned_queries", JSON.stringify(queries));
+          return { ok: true, planned: queries };
         }
       }),
       candidate_upsert: tool({
@@ -307,11 +358,8 @@ export class WeekendScoutAgent extends BaseAgent {
         }
       }),
       recommend: tool({
-        description: "Deliver this cycle's picks: 3–7 candidate ids with a one-line why each. Writes the recommendation note, marks them recommended, and pushes to the phone.",
-        inputSchema: z.object({
-          picks: z.array(z.object({ candidate_id: z.number().int(), why: z.string().min(3).max(200) })).min(1).max(7),
-          intro: z.string().max(200).optional()
-        }),
+        description: "Deliver this cycle's picks: 2–7 candidate ids with a one-line why each. Writes the recommendation note, marks them recommended, pushes to the phone.",
+        inputSchema: z.object({ picks: z.array(z.object({ candidate_id: z.number().int(), why: z.string().min(3).max(200) })).min(1).max(7), intro: z.string().max(200).optional() }),
         execute: async ({ picks, intro }) => {
           const rows = picks.map((pk) => ({ pk, c: this.sql<Candidate>`SELECT * FROM candidates WHERE id = ${pk.candidate_id}`[0] })).filter((x) => x.c);
           if (!rows.length) return { error: "no valid candidate ids" };
@@ -331,23 +379,10 @@ export class WeekendScoutAgent extends BaseAgent {
               pushed = await notify(ctx.fetch, this.env.NTFY_TOPIC, { title, body: rows.map(({ c }, i) => `${i + 1}. ${c.title} (${c.when_start ?? "?"})`).join("\n"), priority: 3 });
             } catch {}
           }
+          this.activity("deliver", `delivered ${rows.length} picks (${title})`, ctx.item?.id ?? null);
           return { ok: true, note_id: note.id, count: rows.length, pushed, next_delivery: nextDue ? fmtInZone(nextDue, p.tz) : null };
         }
       })
     };
-  }
-
-  protected defaultWake(_obs: Observation, ctx: TickCtx): number {
-    const mode = ctx.scratch.mode as string;
-    if (mode === "deliver") return 43_200;
-    if (mode === "research") return 28_800;
-    return 21_600;
-  }
-
-  protected adjustWake(seconds: number, ctx: TickCtx): number {
-    const due = ctx.scratch.due as number | null;
-    if (!due) return seconds;
-    const untilDue = Math.max(60, Math.floor((due - DELIVER_EARLY_MS / 2 - Date.now()) / 1000));
-    return Math.min(seconds, untilDue);
   }
 }

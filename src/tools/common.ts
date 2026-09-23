@@ -38,14 +38,10 @@ export function commonTools(agent: BaseAgent, ctx: TickCtx): ToolSet {
       }
     }),
     finish: tool({
-      description: "REQUIRED last call. Summarise this tick in one line and choose when to wake next (seconds).",
-      inputSchema: z.object({
-        summary: z.string().min(3).max(300),
-        next_wake_seconds: z.number().int().min(30).max(86_400),
-        reason: z.string().max(200).default("")
-      }),
-      execute: async ({ summary, next_wake_seconds, reason }) => {
-        ctx.decision = { summary, nextWakeSeconds: next_wake_seconds, reason };
+      description: "REQUIRED last call. One-line summary of what this think step did and what comes next.",
+      inputSchema: z.object({ summary: z.string().min(3).max(300), reason: z.string().max(200).default("") }),
+      execute: async ({ summary, reason }) => {
+        ctx.decision = { summary, reason };
         return { ok: true };
       }
     })

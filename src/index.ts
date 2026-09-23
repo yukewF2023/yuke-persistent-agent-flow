@@ -53,6 +53,8 @@ export default {
         const agent = await agentStub(env, parts[2]);
         const limit = Number(url.searchParams.get("limit") ?? 50);
         if (parts[3] === "notes") return json(await agent.listNotes(limit, url.searchParams.get("kind") ?? undefined));
+        if (parts[3] === "activity") return json(await agent.listActivity(limit));
+        if (parts[3] === "work") return json(await agent.listWork(url.searchParams.get("status") ?? "open", limit));
         if (parts[3] === "runs") return json(await agent.listRuns(limit));
         if (parts[3] === "queue") return json(await agent.listQueue(url.searchParams.get("status") ?? undefined, limit));
         if (parts[3] === "charter") return json(await agent.getCharter());

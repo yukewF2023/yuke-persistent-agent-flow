@@ -1,25 +1,21 @@
 import { Agent } from "agents";
-import { generateText, hasToolCall, isStepCount, type ToolSet } from "ai";
+import { generateText, hasToolCall, isStepCount, tool, type ToolSet } from "ai";
+import { z } from "zod";
 import { classifyLlmError, makeModel } from "../llm";
 import { SubrequestBudget, type FetchCtx } from "../tools/http";
 import { commonTools } from "../tools/common";
-import type { AgentId, AgentStatus, Env, Note, NoteKind, QueueItem, RunRow, TickResult } from "../types";
+import { GO_CAPS, costUsd } from "../tools/pricing";
+import type { AgentId, AgentStatus, Env, Note, NoteKind, QueueItem, RunRow, TickResult, WorkItem, ActivityRow, SpendWindows } from "../types";
 
 export interface Observation {
-  /** Which kind of tick this is (e.g. "check", "research", "deliver", "quiet"). */
   mode: string;
-  /** Compact, JSON-serialisable summary the LLM reasons over (≤ ~4 KB). */
   data: unknown;
-  /** Short hints appended to the user message (e.g. "next delivery Wed 18:00"). */
   hints: string[];
 }
-
 export interface Decision {
   summary: string;
-  nextWakeSeconds: number;
   reason: string;
 }
-
 export interface TickCtx {
   runId: number;
   now: number;
@@ -28,12 +24,17 @@ export interface TickCtx {
   fetch: FetchCtx;
   budget: SubrequestBudget;
   decision: Decision | null;
-  /** Free-form per-tick scratch for subclasses (e.g. counters). */
   scratch: Record<string, unknown>;
+  /** The work item this think step is executing. */
+  item: WorkItem | null;
 }
 
 const TRANSCRIPT_MAX = 16_000;
-const TICK_SCHEDULE = "tick";
+const LOOP_SCHEDULE = "loop";
+/** One loop segment: bounded by wall time and the free-plan subrequest cap, then re-armed 1 s later. */
+const SEGMENT_WALL_MS = 110_000;
+const SEGMENT_SUBREQUESTS = 40;
+const THINK_MIN_REMAINING = 8;
 
 interface TranscriptStep {
   finish: string;
@@ -41,8 +42,6 @@ interface TranscriptStep {
   calls: { tool: string; input: unknown }[];
   results: { tool: string; output: string }[];
 }
-
-/** Shrink a transcript until it fits TRANSCRIPT_MAX while staying valid JSON (never slice the JSON string). */
 function compactTranscript(steps: TranscriptStep[]): string {
   const size = (s: TranscriptStep[]) => JSON.stringify(s).length;
   let cur = steps.map((s) => ({ ...s, calls: s.calls.map((c) => ({ ...c })), results: s.results.map((r) => ({ ...r })) }));
@@ -56,52 +55,71 @@ function compactTranscript(steps: TranscriptStep[]): string {
 }
 
 /**
- * A persistent agent: durable memory in SQLite, one self-set alarm at all times,
- * a bounded LLM tool loop per tick, and never-throwing error handling.
+ * A persistent worker: a never-ending work loop over a self-maintained worklist.
+ * Code items (fetch, parse, rank…) run continuously and cost nothing; think items call the model,
+ * paced by a spend governor so the month tracks a dollar budget line. State lives in SQLite;
+ * each segment re-arms the next one 1 s later, so the loop survives eviction and errors.
  */
 export abstract class BaseAgent extends Agent<Env> {
   abstract readonly agentId: AgentId;
   abstract readonly displayName: string;
   abstract readonly baseCharter: string;
+  /** Default share of the monthly Go allowance this agent may spend (USD). Overridable via config:governor. */
+  abstract readonly defaultMonthlyBudgetUsd: number;
 
-  /** Seconds. Subclasses may tighten. */
-  wakeBounds = { min: 60, max: 6 * 3600 };
-  /** Total fetch + LLM step budget per tick (free plan: 50 subrequests per invocation). */
-  subrequestCap = 30;
+  /** Cheap check whether seedWork would add anything; subclasses override to avoid empty segments counting as work. */
+  protected hasDueWork(): boolean {
+    return true;
+  }
 
   // ---- subclass contract ----
-  protected abstract observe(ctx: TickCtx): Promise<Observation>;
+  /** Called whenever the open worklist is empty: enqueue the next round of work. Must always add ≥1 item. */
+  protected abstract seedWork(ctx: TickCtx): void;
+  /** Execute a code work item (no model). Return a one-line result for the activity feed. */
+  protected abstract runCode(action: string, args: Record<string, unknown>, ctx: TickCtx): Promise<string>;
+  /** Build the compact observation a think step reasons over. */
+  protected abstract thinkContext(item: WorkItem, ctx: TickCtx): Promise<Observation>;
   protected abstract agentTools(ctx: TickCtx): ToolSet;
-  protected abstract defaultWake(obs: Observation, ctx: TickCtx): number;
-  /** Deterministic decision when the LLM is unavailable (budget / backoff / error). */
-  protected fallbackDecide(_obs: Observation, _ctx: TickCtx): void {}
   protected ensureExtraSchema(): void {}
   protected extraStatus(): Record<string, unknown> {
     return {};
   }
-  /** Extra lines for the memory digest (subclass state the LLM should see every tick). */
   protected memoryDigestExtra(): string[] {
     return [];
   }
-  /** Last word on the wake time (e.g. never sleep past a scheduled delivery). Runs before clamping. */
-  protected adjustWake(seconds: number, _ctx: TickCtx): number {
-    return seconds;
+  /** What to show while no work item is due (e.g. "watching: next check in 40s"). */
+  protected idleLabel(): string {
+    return "waiting for the next scheduled work";
+  }
+  /** Seconds to wait when nothing is due. Kept ≥ 30 s so the free plan's daily row-write cap is respected. */
+  protected idleSeconds(): number {
+    return 30;
   }
 
   // ---- lifecycle ----
   async onStart() {
     this.ensureSchema();
+    // First wake on the loop model: replace any legacy long-delay alarm with an immediate loop start.
+    if (this.kvGet("loop_model") !== "2") {
+      this.kvSet("loop_model", "2");
+      this.kvSet("lock_until", "0");
+      await this.ensureScheduled(2, "loop-model-migration");
+      return;
+    }
     await this.ensureScheduled();
   }
-
-  /** Schedule callback. Must never throw (a throw would trigger DO alarm retries and burn tokens). */
+  /** Legacy schedule callback name from the tick model; old alarms still resolve. */
   async tick(payload?: { reason?: string }) {
+    return this.loop(payload);
+  }
+  /** Schedule callback. Never throws. */
+  async loop(payload?: { reason?: string }) {
     try {
-      await this.runTick("alarm", payload?.reason ?? "scheduled");
+      await this.runSegment("alarm", payload?.reason ?? "loop");
     } catch (err) {
-      console.error(`[${this.agentId}] tick crashed outside runTick`, err);
+      console.error(`[${this.agentId}] segment crashed`, err);
       try {
-        await this.ensureScheduled(300, "crash-recovery");
+        await this.ensureScheduled(5, "crash-recovery");
       } catch {}
     }
   }
@@ -113,16 +131,28 @@ export abstract class BaseAgent extends Agent<Env> {
       CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT, run_id INTEGER, meta TEXT);
       CREATE INDEX IF NOT EXISTS notes_ts ON notes(ts DESC);
       CREATE TABLE IF NOT EXISTS queue (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'open', priority INTEGER NOT NULL DEFAULT 5, task TEXT NOT NULL, source TEXT NOT NULL, result TEXT);
-      CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY AUTOINCREMENT, started_at INTEGER NOT NULL, finished_at INTEGER, trigger TEXT NOT NULL, status TEXT NOT NULL, steps INTEGER DEFAULT 0, input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0, subrequests INTEGER DEFAULT 0, llm_ms INTEGER DEFAULT 0, wall_ms INTEGER DEFAULT 0, next_wake_s INTEGER, summary TEXT, error TEXT, transcript TEXT);
+      CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY AUTOINCREMENT, started_at INTEGER NOT NULL, finished_at INTEGER, trigger TEXT NOT NULL, status TEXT NOT NULL, steps INTEGER DEFAULT 0, input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0, subrequests INTEGER DEFAULT 0, llm_ms INTEGER DEFAULT 0, wall_ms INTEGER DEFAULT 0, next_wake_s INTEGER, summary TEXT, error TEXT, transcript TEXT, cost_usd REAL DEFAULT 0, work_item TEXT);
       CREATE TABLE IF NOT EXISTS seen_items (id TEXT PRIMARY KEY, kind TEXT NOT NULL, first_seen INTEGER NOT NULL, meta TEXT);
+      CREATE TABLE IF NOT EXISTS work (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, action TEXT NOT NULL, args TEXT, priority INTEGER NOT NULL DEFAULT 5, status TEXT NOT NULL DEFAULT 'open', source TEXT NOT NULL DEFAULT 'self', created_at INTEGER NOT NULL, started_at INTEGER, done_at INTEGER, result TEXT);
+      CREATE INDEX IF NOT EXISTS work_open ON work(status, priority, id);
+      CREATE TABLE IF NOT EXISTS activity (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL, work_id INTEGER, cost_usd REAL DEFAULT 0);
+      CREATE INDEX IF NOT EXISTS activity_ts ON activity(ts DESC);
+      CREATE TABLE IF NOT EXISTS spend (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, usd REAL NOT NULL, input_tokens INTEGER, output_tokens INTEGER, cached_tokens INTEGER, run_id INTEGER);
+      CREATE INDEX IF NOT EXISTS spend_ts ON spend(ts);
     `);
+    // migrations for rows created before the loop model
+    try {
+      this.ctx.storage.sql.exec("ALTER TABLE runs ADD COLUMN cost_usd REAL DEFAULT 0");
+    } catch {}
+    try {
+      this.ctx.storage.sql.exec("ALTER TABLE runs ADD COLUMN work_item TEXT");
+    } catch {}
     this.ensureExtraSchema();
   }
 
-  // ---- kv helpers ----
+  // ---- kv ----
   kvGet(key: string): string | null {
-    const row = this.sql<{ value: string }>`SELECT value FROM kv WHERE key = ${key}`[0];
-    return row?.value ?? null;
+    return this.sql<{ value: string }>`SELECT value FROM kv WHERE key = ${key}`[0]?.value ?? null;
   }
   kvSet(key: string, value: string | null) {
     if (value === null) {
@@ -158,27 +188,24 @@ export abstract class BaseAgent extends Agent<Env> {
   }
   listNotes(limit = 30, kind?: string): Note[] {
     limit = Math.min(Math.max(1, limit), 200);
-    return kind
-      ? this.sql<Note>`SELECT * FROM notes WHERE kind = ${kind} ORDER BY id DESC LIMIT ${limit}`
-      : this.sql<Note>`SELECT * FROM notes ORDER BY id DESC LIMIT ${limit}`;
+    return kind ? this.sql<Note>`SELECT * FROM notes WHERE kind = ${kind} ORDER BY id DESC LIMIT ${limit}` : this.sql<Note>`SELECT * FROM notes ORDER BY id DESC LIMIT ${limit}`;
   }
 
-  // ---- queue ----
+  // ---- manager queue (tasks from the orchestrator) ----
   queueAdd(task: string, priority = 5, source = "orchestrator"): QueueItem {
     const now = Date.now();
     this.sql`INSERT INTO queue(created_at, updated_at, status, priority, task, source) VALUES (${now}, ${now}, 'open', ${priority}, ${task.slice(0, 2000)}, ${source})`;
+    this.addWork("think", "manager_task", { task, priority }, Math.min(priority, 3), source);
     return this.sql<QueueItem>`SELECT * FROM queue ORDER BY id DESC LIMIT 1`[0];
   }
   queueUpdate(id: number, status: QueueItem["status"], result: string | null = null): boolean {
-    const before = this.sql<{ id: number }>`SELECT id FROM queue WHERE id = ${id}`[0];
-    if (!before) return false;
+    if (!this.sql<{ id: number }>`SELECT id FROM queue WHERE id = ${id}`[0]) return false;
     this.sql`UPDATE queue SET status = ${status}, result = ${result}, updated_at = ${Date.now()} WHERE id = ${id}`;
     return true;
   }
   queueDrop(id: number, reason = "dropped by orchestrator"): boolean {
     return this.queueUpdate(id, "dropped", reason);
   }
-  /** Remove an item so it can be handed to another agent. Returns the item or null. */
   queueTake(id: number): QueueItem | null {
     const item = this.sql<QueueItem>`SELECT * FROM queue WHERE id = ${id}`[0];
     if (!item) return null;
@@ -186,15 +213,43 @@ export abstract class BaseAgent extends Agent<Env> {
     return item;
   }
   listQueue(status?: string, limit = 50): QueueItem[] {
-    return status
-      ? this.sql<QueueItem>`SELECT * FROM queue WHERE status = ${status} ORDER BY priority ASC, id ASC LIMIT ${limit}`
-      : this.sql<QueueItem>`SELECT * FROM queue ORDER BY id DESC LIMIT ${limit}`;
+    return status ? this.sql<QueueItem>`SELECT * FROM queue WHERE status = ${status} ORDER BY priority ASC, id ASC LIMIT ${limit}` : this.sql<QueueItem>`SELECT * FROM queue ORDER BY id DESC LIMIT ${limit}`;
+  }
+
+  // ---- worklist ----
+  addWork(kind: "code" | "think", action: string, args: Record<string, unknown> | null = null, priority = 5, source = "self", dedupe = true): number {
+    const argsStr = args ? JSON.stringify(args) : null;
+    if (dedupe) {
+      const dup = argsStr
+        ? this.sql<{ id: number }>`SELECT id FROM work WHERE status IN ('open','doing') AND action = ${action} AND args = ${argsStr} LIMIT 1`[0]
+        : this.sql<{ id: number }>`SELECT id FROM work WHERE status IN ('open','doing') AND action = ${action} AND args IS NULL LIMIT 1`[0];
+      if (dup) return dup.id;
+    }
+    this.sql`INSERT INTO work(kind, action, args, priority, source, created_at) VALUES (${kind}, ${action}, ${argsStr}, ${priority}, ${source}, ${Date.now()})`;
+    return Number(this.sql<{ id: number }>`SELECT last_insert_rowid() AS id`[0]?.id ?? 0);
+  }
+  listWork(status = "open", limit = 50): WorkItem[] {
+    return this.sql<WorkItem>`SELECT * FROM work WHERE status = ${status} ORDER BY priority ASC, id ASC LIMIT ${limit}`;
+  }
+  private nextWork(kind?: "code" | "think"): WorkItem | null {
+    return (kind
+      ? this.sql<WorkItem>`SELECT * FROM work WHERE status = 'open' AND kind = ${kind} ORDER BY priority ASC, id ASC LIMIT 1`
+      : this.sql<WorkItem>`SELECT * FROM work WHERE status = 'open' ORDER BY priority ASC, id ASC LIMIT 1`)[0] ?? null;
+  }
+  private finishWork(id: number, status: "done" | "failed", result: string) {
+    this.sql`UPDATE work SET status = ${status}, done_at = ${Date.now()}, result = ${result.slice(0, 500)} WHERE id = ${id}`;
+  }
+  protected activity(kind: string, text: string, workId: number | null = null, cost = 0) {
+    this.sql`INSERT INTO activity(ts, kind, text, work_id, cost_usd) VALUES (${Date.now()}, ${kind}, ${text.slice(0, 300)}, ${workId}, ${cost})`;
+  }
+  listActivity(limit = 30): ActivityRow[] {
+    return this.sql<ActivityRow>`SELECT * FROM activity ORDER BY id DESC LIMIT ${Math.min(limit, 200)}`;
   }
 
   // ---- runs ----
   listRuns(limit = 20): RunRow[] {
     limit = Math.min(Math.max(1, limit), 200);
-    return this.sql<RunRow>`SELECT id, started_at, finished_at, trigger, status, steps, input_tokens, output_tokens, subrequests, llm_ms, wall_ms, next_wake_s, summary, error, NULL AS transcript FROM runs ORDER BY id DESC LIMIT ${limit}`;
+    return this.sql<RunRow>`SELECT id, started_at, finished_at, trigger, status, steps, input_tokens, output_tokens, subrequests, llm_ms, wall_ms, next_wake_s, summary, error, NULL AS transcript, cost_usd, work_item FROM runs ORDER BY id DESC LIMIT ${limit}`;
   }
   getRun(id: number): RunRow | null {
     return this.sql<RunRow>`SELECT * FROM runs WHERE id = ${id}`[0] ?? null;
@@ -205,25 +260,13 @@ export abstract class BaseAgent extends Agent<Env> {
     return this.kvJson<T>(`config:${name}`);
   }
   setConfig(patch: Record<string, unknown>, actor = "orchestrator"): Record<string, unknown> {
-    const applied: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(patch)) {
-      if (k === "wakeBounds" && v && typeof v === "object") {
-        const wb = v as { min?: number; max?: number };
-        this.kvSet("config:wakeBounds", JSON.stringify({ min: wb.min ?? this.wakeBounds.min, max: wb.max ?? this.wakeBounds.max }));
-      } else if (v === null) {
-        this.kvSet(`config:${k}`, null);
-      } else {
-        this.kvSet(`config:${k}`, JSON.stringify(v));
-      }
-      applied[k] = v;
-    }
+    for (const [k, v] of Object.entries(patch)) this.kvSet(`config:${k}`, v === null ? null : JSON.stringify(v));
     this.addNote("admin", `config updated by ${actor}: ${Object.keys(patch).join(", ")}`, null, null, { keys: Object.keys(patch) });
-    return applied;
+    return patch;
   }
   listConfig(): Record<string, unknown> {
-    const rows = this.sql<{ key: string; value: string }>`SELECT key, value FROM kv WHERE key LIKE 'config:%'`;
     const out: Record<string, unknown> = {};
-    for (const r of rows) {
+    for (const r of this.sql<{ key: string; value: string }>`SELECT key, value FROM kv WHERE key LIKE 'config:%'`) {
       try {
         out[r.key.slice(7)] = JSON.parse(r.value);
       } catch {
@@ -232,18 +275,10 @@ export abstract class BaseAgent extends Agent<Env> {
     }
     return out;
   }
-  get effectiveWakeBounds() {
-    return this.kvJson<{ min: number; max: number }>("config:wakeBounds") ?? this.wakeBounds;
-  }
   getCharter(): { base: string; override: string | null; version: number; effective: string } {
     const override = this.kvGet("charter:override");
     const version = Number(this.kvGet("charter:version") ?? 0);
-    return {
-      base: this.baseCharter,
-      override,
-      version,
-      effective: override ? `${this.baseCharter}\n\n## Manager override (v${version})\n${override}` : this.baseCharter
-    };
+    return { base: this.baseCharter, override, version, effective: override ? `${this.baseCharter}\n\n## Manager override (v${version})\n${override}` : this.baseCharter };
   }
   setCharter(text: string | null, reason: string, actor = "orchestrator"): { version: number } {
     const version = Number(this.kvGet("charter:version") ?? 0) + 1;
@@ -256,38 +291,80 @@ export abstract class BaseAgent extends Agent<Env> {
     this.kvSet(`mem:${key.slice(0, 64)}`, value ? value.slice(0, 500) : null);
   }
   memories(): Record<string, string> {
-    const rows = this.sql<{ key: string; value: string }>`SELECT key, value FROM kv WHERE key LIKE 'mem:%' ORDER BY updated_at DESC LIMIT 30`;
-    return Object.fromEntries(rows.map((r) => [r.key.slice(4), r.value]));
+    return Object.fromEntries(this.sql<{ key: string; value: string }>`SELECT key, value FROM kv WHERE key LIKE 'mem:%' ORDER BY updated_at DESC LIMIT 30`.map((r) => [r.key.slice(4), r.value]));
+  }
+
+  // ---- spend governor ----
+  governorConfig() {
+    const c = this.getConfig<{ monthly_budget_usd?: number; burst_usd?: number }>("governor") ?? {};
+    return { monthlyBudgetUsd: c.monthly_budget_usd ?? this.defaultMonthlyBudgetUsd, burstUsd: c.burst_usd ?? 0.25 };
+  }
+  spendWindows(now = Date.now()): SpendWindows {
+    const sum = (ms: number) => Number(this.sql<{ s: number }>`SELECT COALESCE(SUM(usd),0) AS s FROM spend WHERE ts > ${now - ms}`[0]?.s ?? 0);
+    const monthStart = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), 1);
+    return {
+      fiveHourUsd: sum(5 * 3600_000),
+      weekUsd: sum(7 * 86_400_000),
+      monthUsd: Number(this.sql<{ s: number }>`SELECT COALESCE(SUM(usd),0) AS s FROM spend WHERE ts >= ${monthStart}`[0]?.s ?? 0),
+      todayUsd: sum(now - Date.parse(this.today() + "T00:00:00Z")),
+      todayTokens: Number(this.sql<{ s: number }>`SELECT COALESCE(SUM(input_tokens + output_tokens),0) AS s FROM spend WHERE ts >= ${Date.parse(this.today() + "T00:00:00Z")}`[0]?.s ?? 0)
+    };
+  }
+  /** Token bucket in USD: refills at the monthly budget rate, capped at burst. Returns seconds to wait (0 = go). */
+  private governorWait(now: number, estimateUsd: number): number {
+    const { monthlyBudgetUsd, burstUsd } = this.governorConfig();
+    const ratePerSec = monthlyBudgetUsd / (30 * 86_400);
+    let bucket = Number(this.kvGet("gov:bucket") ?? burstUsd);
+    const last = Number(this.kvGet("gov:updated") ?? now);
+    bucket = Math.min(burstUsd, bucket + ((now - last) / 1000) * ratePerSec);
+    this.kvSet("gov:bucket", String(bucket));
+    this.kvSet("gov:updated", String(now));
+    // hard caps: never exceed 90% of Go's shared windows (both agents share them, so each stays under half)
+    const w = this.spendWindows(now);
+    const share = monthlyBudgetUsd / GO_CAPS.month;
+    if (w.fiveHourUsd > GO_CAPS.fiveHour * share * 0.9 || w.weekUsd > GO_CAPS.week * share * 0.9 || w.monthUsd > GO_CAPS.month * share * 0.9) return 900;
+    if (bucket >= estimateUsd) return 0;
+    return Math.ceil((estimateUsd - bucket) / ratePerSec);
+  }
+  private governorCharge(usd: number) {
+    const bucket = Number(this.kvGet("gov:bucket") ?? 0);
+    this.kvSet("gov:bucket", String(bucket - usd));
+  }
+  private avgThinkCost(): number {
+    const r = this.sql<{ a: number }>`SELECT AVG(usd) AS a FROM (SELECT usd FROM spend ORDER BY id DESC LIMIT 10)`[0];
+    return r?.a ? Number(r.a) : 0.002;
   }
 
   // ---- control ----
   async pause(reason = "paused by orchestrator") {
     this.kvSet("paused", "1");
     this.addNote("admin", "paused", reason, null);
+    this.activity("admin", `paused: ${reason}`);
     await this.ensureScheduled();
     return this.getStatus();
   }
   async resume() {
     this.kvSet("paused", null);
     this.addNote("admin", "resumed", null, null);
+    this.activity("admin", "resumed");
     await this.ensureScheduled();
     return this.getStatus();
   }
   get paused() {
     return this.kvGet("paused") === "1";
   }
+  /** Run one loop segment now (used by the admin API). */
   async forceTick(reason = "manual"): Promise<TickResult> {
-    return this.runTick("manual", reason);
+    return this.runSegment("manual", reason);
   }
-  /** Fire a tick via the scheduler without waiting for it. */
   async forceTickAsync(reason = "manual-async"): Promise<{ scheduledFor: number }> {
     const at = await this.ensureScheduled(1, reason);
     return { scheduledFor: at ?? Date.now() };
   }
 
-  // ---- scheduling: exactly one pending "tick" schedule at all times (unless paused) ----
-  async ensureScheduled(delaySeconds?: number, reason = "reschedule"): Promise<number | null> {
-    const pending = (await this.listSchedules()).filter((s) => s.callback === TICK_SCHEDULE);
+  // ---- scheduling: exactly one pending loop alarm (unless paused) ----
+  async ensureScheduled(delaySeconds?: number, reason = "loop"): Promise<number | null> {
+    const pending = (await this.listSchedules()).filter((s) => s.callback === LOOP_SCHEDULE || s.callback === "tick");
     if (this.paused) {
       for (const p of pending) await this.cancelSchedule(p.id);
       this.kvSet("next_tick_at", null);
@@ -295,243 +372,288 @@ export abstract class BaseAgent extends Agent<Env> {
     }
     if (delaySeconds !== undefined) {
       for (const p of pending) await this.cancelSchedule(p.id);
-      const s = await this.schedule(Math.max(1, Math.round(delaySeconds)), TICK_SCHEDULE, { reason });
-      const at = s.time * 1000;
-      this.kvSet("next_tick_at", String(at));
-      this.kvSet("tick_schedule_id", s.id);
-      return at;
+      const s = await this.schedule(Math.max(1, Math.round(delaySeconds)), LOOP_SCHEDULE, { reason });
+      this.kvSet("next_tick_at", String(s.time * 1000));
+      return s.time * 1000;
     }
     if (pending.length === 0) {
-      const s = await this.schedule(5, TICK_SCHEDULE, { reason: "bootstrap" });
+      const s = await this.schedule(2, LOOP_SCHEDULE, { reason: "bootstrap" });
       this.kvSet("next_tick_at", String(s.time * 1000));
-      this.kvSet("tick_schedule_id", s.id);
       return s.time * 1000;
     }
     pending.sort((a, b) => a.time - b.time);
     for (const p of pending.slice(1)) await this.cancelSchedule(p.id);
     this.kvSet("next_tick_at", String(pending[0].time * 1000));
-    this.kvSet("tick_schedule_id", pending[0].id);
     return pending[0].time * 1000;
   }
 
   // ---- status ----
   async getStatus(): Promise<AgentStatus> {
-    const pending = (await this.listSchedules()).filter((s) => s.callback === TICK_SCHEDULE);
-    const limit = Number(this.env.DAILY_TOKEN_BUDGET ?? 400_000);
+    const pending = (await this.listSchedules()).filter((s) => s.callback === LOOP_SCHEDULE);
     const lastRun = this.listRuns(1)[0];
+    const gov = this.governorConfig();
+    const now = Date.now();
+    const bucket = Number(this.kvGet("gov:bucket") ?? gov.burstUsd);
+    const ratePerSec = gov.monthlyBudgetUsd / (30 * 86_400);
     return {
       id: this.agentId,
       name: this.displayName,
       paused: this.paused,
       runCount: Number(this.kvGet("run_count") ?? 0),
+      segmentCount: Number(this.kvGet("segment_count") ?? 0),
       lastTickAt: this.kvGet("last_tick_at") ? Number(this.kvGet("last_tick_at")) : null,
       nextTickAt: pending.length ? Math.min(...pending.map((p) => p.time * 1000)) : null,
       lastSummary: this.kvGet("last_summary"),
       lastError: lastRun?.status === "error" ? lastRun.error : null,
       charterVersion: Number(this.kvGet("charter:version") ?? 0),
-      budgetToday: { tokens: Number(this.kvGet(`budget:${this.today()}`) ?? 0), limit },
+      budgetToday: { tokens: this.spendWindows(now).todayTokens, limit: Number(this.env.DAILY_TOKEN_BUDGET ?? 400_000) },
       queueOpen: Number(this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM queue WHERE status = 'open'`[0]?.n ?? 0),
       pendingSchedules: pending.length,
+      workingNow: this.kvGet("working_now"),
+      workOpen: Number(this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM work WHERE status = 'open'`[0]?.n ?? 0),
+      workDoneToday: Number(this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM work WHERE status = 'done' AND done_at >= ${Date.parse(this.today() + "T00:00:00Z")}`[0]?.n ?? 0),
+      thinksToday: Number(this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM spend WHERE ts >= ${Date.parse(this.today() + "T00:00:00Z")}`[0]?.n ?? 0),
+      spend: this.spendWindows(now),
+      governor: { monthlyBudgetUsd: gov.monthlyBudgetUsd, burstUsd: gov.burstUsd, bucketUsd: Math.max(0, Math.min(gov.burstUsd, bucket + ((now - Number(this.kvGet("gov:updated") ?? now)) / 1000) * ratePerSec)), waitUntil: this.kvGet("gov:wait_until") ? Number(this.kvGet("gov:wait_until")) : null, avgThinkUsd: this.avgThinkCost() },
       recentRuns: this.listRuns(8).map(({ transcript: _t, error: _e, finished_at: _f, llm_ms: _l, wall_ms: _w, ...r }) => r),
       recentNotes: this.listNotes(15),
+      recentActivity: this.listActivity(20),
       extra: this.extraStatus()
     };
   }
 
-  // ---- the tick ----
-  async runTick(trigger: string, reason: string): Promise<TickResult> {
+  // ---- the loop segment ----
+  async runSegment(trigger: string, reason: string): Promise<TickResult> {
     const now = Date.now();
     const lockUntil = Number(this.kvGet("lock_until") ?? 0);
-    if (lockUntil > now) {
-      return { runId: 0, status: "skipped", steps: 0, subrequests: 0, inputTokens: 0, outputTokens: 0, nextWakeSeconds: null, nextTickAt: null, summary: "another tick is running", error: null };
-    }
-    this.kvSet("lock_until", String(now + 180_000));
-
+    if (lockUntil > now) return this.emptyResult("skipped", "another segment is running");
+    this.kvSet("lock_until", String(now + SEGMENT_WALL_MS + 60_000));
     if (this.paused) {
       this.kvSet("lock_until", "0");
       await this.ensureScheduled();
-      return { runId: 0, status: "paused", steps: 0, subrequests: 0, inputTokens: 0, outputTokens: 0, nextWakeSeconds: null, nextTickAt: null, summary: "paused", error: null };
+      return this.emptyResult("paused", "paused");
     }
-
-    this.sql`INSERT INTO runs(started_at, trigger, status) VALUES (${now}, ${trigger}, 'running')`;
-    const runId = Number(this.sql<{ id: number }>`SELECT last_insert_rowid() AS id`[0]?.id ?? 0);
-    const runCount = Number(this.kvGet("run_count") ?? 0) + 1;
-    this.kvSet("run_count", String(runCount));
-    this.kvSet("last_tick_at", String(now));
-
-    const budget = new SubrequestBudget(this.subrequestCap);
-    const ctx: TickCtx = { runId, now, trigger, reason, fetch: { budget }, budget, decision: null, scratch: {} };
-    const wb = this.effectiveWakeBounds;
-    const clampWake = (s: number) => Math.min(wb.max, Math.max(wb.min, Math.round(this.adjustWake(s, ctx))));
-
-    let status: RunRow["status"] = "ok";
-    let steps = 0;
-    let inputTokens = 0;
-    let outputTokens = 0;
-    let llmMs = 0;
-    let transcript: unknown = null;
-    let error: string | null = null;
-    let summary: string | null = null;
-    let nextWake: number | null = null;
-
+    const segNo = Number(this.kvGet("segment_count") ?? 0) + 1;
+    if (this.nextWork() || this.hasDueWork()) {
+      this.kvSet("segment_count", String(segNo));
+      this.kvSet("last_tick_at", String(now));
+    }
+    const budget = new SubrequestBudget(SEGMENT_SUBREQUESTS);
+    const ctx: TickCtx = { runId: 0, now, trigger, reason, fetch: { budget }, budget, decision: null, scratch: {}, item: null };
+    let items = 0;
+    let thinks = 0;
+    let costSeg = 0;
+    let nextDelay = 1;
+    let lastSummary: string | null = null;
     try {
-      const obs = await this.observe(ctx);
-      const limit = Number(this.env.DAILY_TOKEN_BUDGET ?? 400_000);
-      const spent = Number(this.kvGet(`budget:${this.today()}`) ?? 0);
-      const backoffUntil = Number(this.kvGet("llm_backoff_until") ?? 0);
-
-      if (spent >= limit || backoffUntil > now) {
-        this.fallbackDecide(obs, ctx);
-        status = "budget";
-        summary = spent >= limit ? `daily token budget exhausted (${spent}/${limit}); deterministic fallback` : `LLM backoff until ${new Date(backoffUntil).toISOString()}; deterministic fallback`;
-        nextWake = clampWake(this.defaultWake(obs, ctx));
-      } else {
+      while (Date.now() - now < SEGMENT_WALL_MS && budget.remaining >= 4) {
+        if (!this.nextWork()) this.seedWork(ctx);
+        let item = this.nextWork();
+        if (!item) {
+          nextDelay = this.idleSeconds();
+          break;
+        }
+        if (item.kind === "think") {
+          const wait = this.governorWait(Date.now(), this.avgThinkCost());
+          if (wait > 0 || budget.remaining < THINK_MIN_REMAINING) {
+            const codeItem = this.nextWork("code");
+            if (codeItem) item = codeItem;
+            else {
+              const delay = wait > 0 ? Math.min(600, Math.max(5, wait)) : 2;
+              this.kvSet("gov:wait_until", String(Date.now() + delay * 1000));
+              this.kvSet("working_now", wait > 0 ? `pacing: next think in ~${delay}s to stay within $${this.governorConfig().monthlyBudgetUsd}/month` : "segment budget used; continuing in 2s");
+              nextDelay = delay;
+              break;
+            }
+          } else this.kvSet("gov:wait_until", null);
+        }
+        const args = item.args ? (JSON.parse(item.args) as Record<string, unknown>) : {};
+        this.sql`UPDATE work SET status = 'doing', started_at = ${Date.now()} WHERE id = ${item.id}`;
+        this.kvSet("working_now", `${item.kind}: ${item.action}${args && Object.keys(args).length ? " " + JSON.stringify(args).slice(0, 80) : ""}`);
+        ctx.item = item;
         try {
-          const r = await this.decide(obs, ctx, runCount);
-          steps = r.steps;
-          inputTokens = r.inputTokens;
-          outputTokens = r.outputTokens;
-          llmMs = r.llmMs;
-          transcript = r.transcript;
-          if (ctx.decision) {
-            summary = ctx.decision.summary;
-            nextWake = clampWake(ctx.decision.nextWakeSeconds);
+          if (item.kind === "code") {
+            const t0 = Date.now();
+            const result = await this.runCode(item.action, args, ctx);
+            this.finishWork(item.id, "done", result);
+            this.activity("code", `${item.action}: ${result}`.slice(0, 300), item.id);
+            items++;
+            void t0;
           } else {
-            summary = (r.text || "model did not call finish").slice(0, 300);
-            nextWake = clampWake(this.defaultWake(obs, ctx));
-            error = `no finish call (finishReason=${r.finishReason})`;
+            const r = await this.think(item, args, ctx);
+            this.finishWork(item.id, r.status === "ok" ? "done" : "failed", r.summary ?? r.error ?? "");
+            thinks++;
+            costSeg += r.costUsd;
+            lastSummary = r.summary;
+            items++;
           }
-          this.kvSet(`budget:${this.today()}`, String(spent + inputTokens + outputTokens));
         } catch (err) {
-          const le = classifyLlmError(err);
-          this.fallbackDecide(obs, ctx);
-          status = "error";
-          error = `llm ${le.kind}${le.status ? ` ${le.status}` : ""}: ${le.message}`;
-          if (le.kind === "rate_limit") this.kvSet("llm_backoff_until", String(now + 15 * 60_000));
-          if (le.kind === "auth") this.addNote("error", "LLM auth failed: check OPENCODE_API_KEY", le.message, runId);
-          nextWake = clampWake(Math.max(300, this.defaultWake(obs, ctx)));
-          summary = "LLM call failed; deterministic fallback";
+          const msg = String((err as Error)?.message ?? err).slice(0, 300);
+          this.finishWork(item.id, "failed", msg);
+          this.activity("error", `${item.action} failed: ${msg}`, item.id);
+          this.addNote("error", `${item.action} failed: ${msg.slice(0, 120)}`, msg, null);
         }
       }
-    } catch (err) {
-      status = "error";
-      error = String((err as Error)?.stack ?? err).slice(0, 1000);
-      const lastWake = Number(this.kvGet("last_wake_s") ?? 600);
-      nextWake = clampWake(Math.max(300, lastWake * 2));
-      summary = "observe failed";
-      this.addNote("error", `tick #${runCount} failed: ${String((err as Error)?.message ?? err).slice(0, 120)}`, error, runId);
-    }
-
-    const finishedAt = Date.now();
-    const transcriptStr = transcript ? compactTranscript(transcript as TranscriptStep[]) : null;
-    this.sql`UPDATE runs SET finished_at = ${finishedAt}, status = ${status}, steps = ${steps}, input_tokens = ${inputTokens}, output_tokens = ${outputTokens}, subrequests = ${budget.used + steps}, llm_ms = ${llmMs}, wall_ms = ${finishedAt - now}, next_wake_s = ${nextWake}, summary = ${summary}, error = ${error}, transcript = ${transcriptStr} WHERE id = ${runId}`;
-    this.kvSet("last_summary", summary);
-    this.kvSet("last_wake_s", String(nextWake ?? 600));
-    this.prune();
-
-    let nextTickAt: number | null = null;
-    try {
-      nextTickAt = await this.ensureScheduled(nextWake ?? 600, `after run #${runCount}`);
-    } catch (err) {
-      console.error(`[${this.agentId}] ensureScheduled failed`, err);
     } finally {
+      this.prune();
+      if (lastSummary) this.kvSet("last_summary", lastSummary);
+      if (!this.kvGet("working_now")?.startsWith("pacing")) this.kvSet("working_now", nextDelay <= 2 ? "between segments" : this.idleLabel());
+      try {
+        await this.ensureScheduled(nextDelay, `after segment #${segNo}`);
+      } catch (err) {
+        console.error(`[${this.agentId}] ensureScheduled failed`, err);
+      }
       this.kvSet("lock_until", "0");
     }
-    console.log(`[${this.agentId}] run #${runCount} ${status} steps=${steps} sub=${budget.used} tokens=${inputTokens}/${outputTokens} next=${nextWake}s :: ${summary}`);
-    return { runId, status, steps, subrequests: budget.used + steps, inputTokens, outputTokens, nextWakeSeconds: nextWake, nextTickAt, summary, error };
+    console.log(`[${this.agentId}] segment #${segNo} items=${items} thinks=${thinks} sub=${budget.used} cost=$${costSeg.toFixed(4)} next=${nextDelay}s`);
+    return { runId: segNo, status: "ok", steps: items, subrequests: budget.used, inputTokens: 0, outputTokens: 0, nextWakeSeconds: nextDelay, nextTickAt: this.kvGet("next_tick_at") ? Number(this.kvGet("next_tick_at")) : null, summary: `segment #${segNo}: ${items} work items, ${thinks} think steps, $${costSeg.toFixed(4)}`, error: null, thinks, costUsd: costSeg };
   }
-
+  private emptyResult(status: TickResult["status"], summary: string): TickResult {
+    return { runId: 0, status, steps: 0, subrequests: 0, inputTokens: 0, outputTokens: 0, nextWakeSeconds: null, nextTickAt: null, summary, error: null, thinks: 0, costUsd: 0 };
+  }
   private prune() {
     this.sql`DELETE FROM notes WHERE id NOT IN (SELECT id FROM notes ORDER BY id DESC LIMIT 2000)`;
     this.sql`DELETE FROM runs WHERE id NOT IN (SELECT id FROM runs ORDER BY id DESC LIMIT 400)`;
     this.sql`DELETE FROM queue WHERE status IN ('done','dropped') AND id NOT IN (SELECT id FROM queue ORDER BY id DESC LIMIT 300)`;
+    this.sql`DELETE FROM work WHERE status IN ('done','failed') AND id NOT IN (SELECT id FROM work ORDER BY id DESC LIMIT 500)`;
+    this.sql`DELETE FROM activity WHERE id NOT IN (SELECT id FROM activity ORDER BY id DESC LIMIT 600)`;
+    this.sql`DELETE FROM spend WHERE ts < ${Date.now() - 40 * 86_400_000}`;
   }
 
-  // ---- LLM decision ----
+  // ---- think step (one model call with tools) ----
   private memoryDigest(): string {
-    const notes = this.listNotes(10);
-    const runs = this.listRuns(3);
+    const notes = this.listNotes(8);
+    const act = this.listActivity(12);
     const mem = this.memories();
-    const lines: string[] = [];
-    lines.push("Recent notes (newest first):");
+    const lines: string[] = ["Recent activity (newest first):"];
+    lines.push(...(act.length ? act.map((a) => `- ${new Date(a.ts).toISOString().slice(11, 16)} [${a.kind}] ${a.text.slice(0, 140)}`) : ["- (none yet)"]));
+    lines.push("Recent notes:");
     lines.push(...(notes.length ? notes.map((n) => `- [${n.kind}] ${new Date(n.ts).toISOString().slice(0, 16)} ${n.title}`) : ["- (none yet)"]));
-    lines.push("Recent runs:");
-    lines.push(...(runs.length ? runs.map((r) => `- #${r.id} ${r.status} next=${r.next_wake_s ?? "?"}s :: ${r.summary ?? ""}`) : ["- (first run)"]));
     const memEntries = Object.entries(mem);
-    if (memEntries.length) {
-      lines.push("Remembered facts:");
-      lines.push(...memEntries.map(([k, v]) => `- ${k}: ${v}`));
-    }
+    if (memEntries.length) lines.push("Remembered facts:", ...memEntries.map(([k, v]) => `- ${k}: ${v}`));
     lines.push(...this.memoryDigestExtra());
     return lines.join("\n");
   }
 
-  private async decide(obs: Observation, ctx: TickCtx, runCount: number) {
+  private async think(item: WorkItem, args: Record<string, unknown>, ctx: TickCtx): Promise<{ status: "ok" | "error"; summary: string | null; error: string | null; costUsd: number }> {
     const env = this.env;
-    const maxSteps = Math.max(2, Math.min(20, Number(env.MAX_STEPS ?? 8)));
-    const maxOutputTokens = Number(env.MAX_OUTPUT_TOKENS ?? 900);
-    const wb = this.effectiveWakeBounds;
-    const charter = this.getCharter().effective;
-    const openQueue = this.listQueue("open", 10);
+    const now = Date.now();
+    this.sql`INSERT INTO runs(started_at, trigger, status, work_item) VALUES (${now}, ${ctx.trigger}, 'running', ${`${item.action} ${item.args ?? ""}`.slice(0, 200)})`;
+    const runId = Number(this.sql<{ id: number }>`SELECT last_insert_rowid() AS id`[0]?.id ?? 0);
+    const runCount = Number(this.kvGet("run_count") ?? 0) + 1;
+    this.kvSet("run_count", String(runCount));
+    ctx.runId = runId;
+    ctx.decision = null;
+    const maxSteps = Math.max(2, Math.min(12, Number(env.MAX_STEPS ?? 6)));
+    const maxOutputTokens = Number(env.MAX_OUTPUT_TOKENS ?? 1500);
+    let status: "ok" | "error" = "ok";
+    let error: string | null = null;
+    let summary: string | null = null;
+    let steps = 0;
+    let inTok = 0;
+    let outTok = 0;
+    let cached = 0;
+    let llmMs = 0;
+    let transcript: string | null = null;
+    let usd = 0;
+    try {
+      const obs = await this.thinkContext(item, ctx);
+      const openQueue = this.listQueue("open", 6);
+      const openWork = this.listWork("open", 8);
+      const system = [
+        `You are "${this.displayName}" (id: ${this.agentId}), a persistent worker agent running continuously as a Cloudflare Durable Object. This is think step #${runCount}. Now: ${new Date(now).toISOString()}.`,
+        "Operating rules:",
+        `- You are executing ONE work item: "${item.action}"${item.args ? ` with args ${item.args.slice(0, 300)}` : ""}. Do it, then plan follow-up work with \`plan_work\` so the loop never runs dry, then call \`finish\`.`,
+        `- Be terse. At most ${maxSteps} tool steps; fetch budget left this segment: ${ctx.budget.remaining}. Tools tell you when a budget is gone. On your last step only \`finish\` is available.`,
+        "- Notes are public. Never put secrets, tokens or anyone's personal data in notes. Only write notes worth remembering; never 'all healthy' notes.",
+        "- Manager tasks arrive as queue items; complete or drop them with the queue tools.",
+        "",
+        "# Charter",
+        this.getCharter().effective,
+        "",
+        "# Memory",
+        this.memoryDigest()
+      ].join("\n");
+      const user = [
+        `WORK ITEM: ${item.action}${item.args ? " " + item.args : ""}`,
+        `OBSERVATION (mode=${obs.mode}):`,
+        "```json",
+        JSON.stringify(obs.data).slice(0, 7000),
+        "```",
+        obs.hints.length ? "Hints:\n" + obs.hints.map((h) => `- ${h}`).join("\n") : "",
+        openWork.length ? "OPEN WORKLIST (next up):\n" + openWork.map((w) => `- #${w.id} ${w.kind} ${w.action} ${w.args ?? ""}`).join("\n") : "OPEN WORKLIST: (empty — you must plan_work)",
+        openQueue.length ? "MANAGER QUEUE:\n" + openQueue.map((q) => `- #${q.id} (p${q.priority}, from ${q.source}): ${q.task}`).join("\n") : "",
+        "Do the work item, plan follow-ups, then finish."
+      ]
+        .filter(Boolean)
+        .join("\n");
+      const tools: ToolSet = { ...commonTools(this, ctx), ...this.workTools(ctx), ...this.agentTools(ctx) };
+      const t0 = Date.now();
+      const result = await generateText({
+        model: makeModel(env, `${this.agentId}-run-${runId}`),
+        system,
+        prompt: user,
+        tools,
+        stopWhen: [isStepCount(maxSteps), hasToolCall("finish")],
+        prepareStep: ({ stepNumber }) => (stepNumber >= maxSteps - 1 ? { activeTools: ["finish"], toolChoice: { type: "tool", toolName: "finish" } } : undefined),
+        maxOutputTokens,
+        maxRetries: 1,
+        abortSignal: AbortSignal.timeout(90_000)
+      });
+      llmMs = Date.now() - t0;
+      steps = result.steps.length;
+      inTok = result.totalUsage.inputTokens ?? 0;
+      outTok = result.totalUsage.outputTokens ?? 0;
+      const details = (result.totalUsage as { inputTokenDetails?: { cacheReadInputTokens?: number; cachedInputTokens?: number } }).inputTokenDetails;
+      cached = details?.cacheReadInputTokens ?? details?.cachedInputTokens ?? 0;
+      usd = costUsd(inTok, outTok, cached, now);
+      transcript = compactTranscript(
+        result.steps.map((s) => ({
+          finish: s.finishReason,
+          text: s.text ? s.text.slice(0, 600) : undefined,
+          calls: s.toolCalls.map((c) => ({ tool: c.toolName, input: c.input })),
+          results: s.toolResults.map((r) => ({ tool: r.toolName, output: JSON.stringify(r.output).slice(0, 500) }))
+        }))
+      );
+      const decision = ctx.decision as Decision | null;
+      summary = decision?.summary ?? (result.text || "no finish call").slice(0, 300);
+      if (!decision) error = `no finish call (finishReason=${result.finishReason})`;
+    } catch (err) {
+      const le = classifyLlmError(err);
+      status = "error";
+      error = `llm ${le.kind}${le.status ? ` ${le.status}` : ""}: ${le.message}`;
+      if (le.kind === "rate_limit") this.kvSet("gov:wait_until", String(Date.now() + 15 * 60_000));
+      if (le.kind === "auth") this.addNote("error", "LLM auth failed: check OPENCODE_API_KEY", le.message, runId);
+      this.activity("error", error.slice(0, 200), item.id);
+    }
+    const finishedAt = Date.now();
+    this.sql`UPDATE runs SET finished_at = ${finishedAt}, status = ${status}, steps = ${steps}, input_tokens = ${inTok}, output_tokens = ${outTok}, subrequests = ${steps}, llm_ms = ${llmMs}, wall_ms = ${finishedAt - now}, summary = ${summary}, error = ${error}, transcript = ${transcript}, cost_usd = ${usd} WHERE id = ${runId}`;
+    if (usd > 0) {
+      this.sql`INSERT INTO spend(ts, usd, input_tokens, output_tokens, cached_tokens, run_id) VALUES (${finishedAt}, ${usd}, ${inTok}, ${outTok}, ${cached}, ${runId})`;
+      this.governorCharge(usd);
+    }
+    this.activity("think", `${item.action}: ${summary ?? error ?? ""}`.slice(0, 300), item.id, usd);
+    return { status, summary, error, costUsd: usd };
+  }
 
-    const system = [
-      `You are "${this.displayName}" (id: ${this.agentId}), a persistent agent running as a Cloudflare Durable Object. This is run #${runCount} (trigger: ${ctx.trigger}, reason: ${ctx.reason}). Now: ${new Date(ctx.now).toISOString()}.`,
-      "Operating rules:",
-      `- Reason over the OBSERVATION and your MEMORY. Be terse; no filler.`,
-      `- You have at most ${maxSteps} tool-calling steps and a fetch budget of ${ctx.budget.remaining} more requests this tick. Tools tell you when the budget is gone. On your last step only \`finish\` is available, so wrap up before then.`,
-      `- You MUST end by calling the \`finish\` tool with a one-line summary and next_wake_seconds between ${wb.min} and ${wb.max}. Follow the wake policy in your charter.`,
-      `- Notes are public. Never put secrets, tokens, or anyone's personal data in a note. Never write "all healthy" notes; only write notes worth remembering.`,
-      `- Queue items come from your manager (the orchestrator). Complete or drop them with the queue tools when done.`,
-      "",
-      "# Charter",
-      charter,
-      "",
-      "# Memory",
-      this.memoryDigest()
-    ].join("\n");
-
-    const user = [
-      `OBSERVATION (mode=${obs.mode}):`,
-      "```json",
-      JSON.stringify(obs.data, null, 0).slice(0, 6000),
-      "```",
-      obs.hints.length ? "Hints:\n" + obs.hints.map((h) => `- ${h}`).join("\n") : "",
-      openQueue.length ? "OPEN QUEUE:\n" + openQueue.map((q) => `- #${q.id} (p${q.priority}, from ${q.source}): ${q.task}`).join("\n") : "OPEN QUEUE: (empty)",
-      "Decide what to do now, act with tools, then call finish."
-    ]
-      .filter(Boolean)
-      .join("\n");
-
-    const tools: ToolSet = { ...commonTools(this, ctx), ...this.agentTools(ctx) };
-    const t0 = Date.now();
-    const result = await generateText({
-      model: makeModel(env, `${this.agentId}-run-${ctx.runId}`),
-      system,
-      prompt: user,
-      tools,
-      stopWhen: [isStepCount(maxSteps), hasToolCall("finish")],
-      // Last allowed step: only `finish` is available and it is required, so a tick always ends with a decision.
-      prepareStep: ({ stepNumber }) =>
-        stepNumber >= maxSteps - 1 ? { activeTools: ["finish"], toolChoice: { type: "tool", toolName: "finish" } } : undefined,
-      maxOutputTokens,
-      maxRetries: 1,
-      abortSignal: AbortSignal.timeout(120_000)
-    });
-    const llmMs = Date.now() - t0;
-    const transcript = result.steps.map((s) => ({
-      finish: s.finishReason,
-      text: s.text ? s.text.slice(0, 600) : undefined,
-      calls: s.toolCalls.map((c) => ({ tool: c.toolName, input: c.input })),
-      results: s.toolResults.map((r) => ({ tool: r.toolName, output: JSON.stringify(r.output).slice(0, 500) }))
-    }));
+  /** Tools that manage the worklist, available to every think step. */
+  private workTools(ctx: TickCtx): ToolSet {
     return {
-      steps: result.steps.length,
-      inputTokens: result.totalUsage.inputTokens ?? 0,
-      outputTokens: result.totalUsage.outputTokens ?? 0,
-      llmMs,
-      transcript,
-      text: result.text,
-      finishReason: result.finishReason
+      plan_work: tool({
+        description: "Add follow-up work items so the loop keeps going. kind 'code' runs without the model (see your charter for available code actions); kind 'think' brings you back for reasoning. Lower priority number = sooner.",
+        inputSchema: z.object({
+          items: z.array(z.object({ kind: z.enum(["code", "think"]), action: z.string().min(2).max(60), args: z.record(z.string(), z.any()).optional(), priority: z.number().int().min(1).max(9).default(5) })).min(1).max(12)
+        }),
+        execute: async ({ items }) => ({ added: items.map((it) => this.addWork(it.kind, it.action, it.args ?? null, it.priority, `think#${ctx.runId}`)) })
+      }),
+      drop_work: tool({
+        description: "Drop an open work item that is no longer useful.",
+        inputSchema: z.object({ id: z.number().int(), reason: z.string().max(200) }),
+        execute: async ({ id, reason }) => {
+          this.finishWork(id, "failed", `dropped: ${reason}`);
+          return { ok: true };
+        }
+      })
     };
   }
 }

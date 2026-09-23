@@ -49,6 +49,8 @@ export interface RunRow {
   summary: string | null;
   error: string | null;
   transcript: string | null;
+  cost_usd: number;
+  work_item: string | null;
 }
 
 export interface TickResult {
@@ -62,6 +64,39 @@ export interface TickResult {
   nextTickAt: number | null;
   summary: string | null;
   error: string | null;
+  thinks: number;
+  costUsd: number;
+}
+
+export interface WorkItem {
+  id: number;
+  kind: "code" | "think";
+  action: string;
+  args: string | null;
+  priority: number;
+  status: "open" | "doing" | "done" | "failed";
+  source: string;
+  created_at: number;
+  started_at: number | null;
+  done_at: number | null;
+  result: string | null;
+}
+
+export interface ActivityRow {
+  id: number;
+  ts: number;
+  kind: string;
+  text: string;
+  work_id: number | null;
+  cost_usd: number;
+}
+
+export interface SpendWindows {
+  fiveHourUsd: number;
+  weekUsd: number;
+  monthUsd: number;
+  todayUsd: number;
+  todayTokens: number;
 }
 
 export interface AgentStatus {
@@ -77,8 +112,16 @@ export interface AgentStatus {
   budgetToday: { tokens: number; limit: number };
   queueOpen: number;
   pendingSchedules: number;
-  recentRuns: Pick<RunRow, "id" | "started_at" | "status" | "steps" | "input_tokens" | "output_tokens" | "subrequests" | "next_wake_s" | "summary" | "trigger">[];
+  segmentCount: number;
+  workingNow: string | null;
+  workOpen: number;
+  workDoneToday: number;
+  thinksToday: number;
+  spend: SpendWindows;
+  governor: { monthlyBudgetUsd: number; burstUsd: number; bucketUsd: number; waitUntil: number | null; avgThinkUsd: number };
+  recentRuns: Pick<RunRow, "id" | "started_at" | "status" | "steps" | "input_tokens" | "output_tokens" | "subrequests" | "next_wake_s" | "summary" | "trigger" | "cost_usd" | "work_item">[];
   recentNotes: Note[];
+  recentActivity: ActivityRow[];
   extra: Record<string, any>;
 }
 

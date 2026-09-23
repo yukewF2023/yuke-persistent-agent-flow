@@ -147,6 +147,19 @@ export async function handleAdmin(request: Request, env: Env, path: string[]): P
       return json(await agent.resume());
     }
     if (sub === "ensure" && method === "POST") return json({ nextTickAt: await agent.ensureScheduled() });
+    if (sub === "work" && method === "POST") {
+      const b = await body<{ kind?: "code" | "think"; action?: string; args?: Record<string, unknown>; priority?: number }>(request);
+      if (!b.action || (b.kind !== "code" && b.kind !== "think")) return json({ error: "kind (code|think) and action required" }, 400);
+      const workId = await agent.addWork(b.kind, b.action, b.args ?? null, b.priority ?? 3, "orchestrator");
+      await team.addLog("orchestrator", "work.add", id, `#${workId} ${b.kind} ${b.action}`);
+      return json({ id: workId });
+    }
+    if (sub === "work" && method === "GET") {
+      return json(await agent.listWork(new URL(request.url).searchParams.get("status") ?? "open", 100));
+    }
+    if (false) {
+      return json({ id });
+    }
     if (sub === "config" && method === "GET") return json(await agent.listConfig());
     if (sub === "config" && method === "PATCH") {
       const b = await body<Record<string, unknown>>(request);

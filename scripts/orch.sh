@@ -28,6 +28,10 @@ case "$cmd" in
   status)        curl -sS "$WORKER_URL/api/status" | j ;;
   agents)        get /admin/agents ;;
   notes)         curl -sS "$WORKER_URL/api/agents/${1:?agent}/notes?limit=${2:-30}" | j ;;
+  activity)      curl -sS "$WORKER_URL/api/agents/${1:?agent}/activity?limit=${2:-40}" | python3 -c 'import json,sys,datetime;[print(datetime.datetime.fromtimestamp(a["ts"]/1000,datetime.UTC).strftime("%m-%d %H:%MZ"),a["kind"],a["text"][:160],("$%.4f"%a["cost_usd"]) if a["cost_usd"] else "") for a in json.load(sys.stdin)]' ;;
+  work)          get "/admin/agents/${1:?agent}/work?status=${2:-open}" ;;
+  work-add)      post "/admin/agents/${1:?agent}/work" "{\"kind\":\"${2:?code|think}\",\"action\":\"${3:?action}\",\"args\":${4:-null},\"priority\":${5:-3}}" ;;
+  governor)      if [ -n "${2:-}" ]; then post "/admin/agents/${1:?agent}/config" "{\"governor\":{\"monthly_budget_usd\":$2${3:+,\"burst_usd\":$3}}}" PATCH; else curl -sS "$WORKER_URL/api/agents/${1:?agent}" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(json.dumps({"governor":d["governor"],"spend":d["spend"],"workingNow":d["workingNow"]},indent=2))'; fi ;;
   runs)          curl -sS "$WORKER_URL/api/agents/${1:?agent}/runs?limit=${2:-10}" | j ;;
   run)           get "/admin/agents/${1:?agent}/runs/${2:?run id}" ;;
   queue)         post "/admin/agents/${1:?agent}/queue" "{\"task\":$(printf '%s' "${2:?task}" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))'),\"priority\":${3:-5}}" ;;

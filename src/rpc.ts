@@ -1,4 +1,4 @@
-import type { AgentStatus, FeedbackRow, LogRow, Note, QueueItem, RunRow, TickResult } from "./types";
+import type { ActivityRow, AgentStatus, FeedbackRow, LogRow, Note, QueueItem, RunRow, TickResult, WorkItem } from "./types";
 import type { Candidate, Rating, SearchProfile } from "./agents/weekend-scout-agent";
 
 /**
@@ -7,6 +7,9 @@ import type { Candidate, Rating, SearchProfile } from "./agents/weekend-scout-ag
  */
 export interface AgentRpc {
   getStatus(): Promise<AgentStatus>;
+  listActivity(limit?: number): Promise<ActivityRow[]>;
+  listWork(status?: string, limit?: number): Promise<WorkItem[]>;
+  addWork(kind: "code" | "think", action: string, args?: Record<string, unknown> | null, priority?: number, source?: string, dedupe?: boolean): Promise<number>;
   listNotes(limit?: number, kind?: string): Promise<Note[]>;
   listRuns(limit?: number): Promise<RunRow[]>;
   getRun(id: number): Promise<RunRow | null>;
