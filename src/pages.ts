@@ -111,3 +111,12 @@ export function renderTaskPage(d: { task: TaskRow & { deps: number[] }; reviews:
 export function renderNotFound(): string {
   return shell("Not found", `<div class="top"><h1><a href="/">← board</a> · not found</h1></div>`, null);
 }
+
+export function renderUnavailable(error: string): string {
+  const cap = /rows read/i.test(error);
+  const body = `<div class="top"><div><h1>Agent board</h1><span class="muted">temporarily unavailable</span></div></div>
+<section class="card"><h2>${cap ? "Cloudflare free-tier daily read limit reached" : "Board error"}</h2>
+<p>${esc(error)}</p>
+${cap ? `<p class="muted">The Durable Object's daily row-read allowance is exhausted. It resets at 00:00 UTC; the workers and the manager retry on their own and the board comes back by itself. This page refreshes every 5 minutes.</p>` : ""}</section>`;
+  return shell("Agent board · unavailable", body, 300);
+}

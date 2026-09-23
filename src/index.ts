@@ -1,5 +1,5 @@
 import { Board } from "./board";
-import { renderNotFound, renderStatusPage, renderTaskPage } from "./pages";
+import { renderNotFound, renderStatusPage, renderTaskPage, renderUnavailable } from "./pages";
 import type { BoardStatus, Env, Role } from "./types";
 import { bearerOk, html, json } from "./util";
 
@@ -31,8 +31,12 @@ export default {
     const internal = (path: string) => stub.fetch(new Request(url.origin + path, { headers: { "x-board-role": "public" } }));
     try {
       if (role === "public" && parts.length === 0) {
-        const status = (await (await internal("/api/status")).json()) as BoardStatus;
-        return html(renderStatusPage(status, Date.now()));
+        const res = await internal("/api/status");
+        if (!res.ok) {
+          const err = ((await res.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${res.status}`;
+          return html(renderUnavailable(err), 503);
+        }
+        return html(renderStatusPage((await res.json()) as BoardStatus, Date.now()));
       }
       if (role === "public" && parts[0] === "tasks" && parts[1]) {
         const res = await internal(`/api/tasks/${encodeURIComponent(parts[1])}`);
