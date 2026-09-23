@@ -8,5 +8,5 @@
 
 ## Known limits
 - e2-micro has 1 GB RAM: test runs are serialized through `./run-tests` (flock) and each worker has MemoryMax=450M. If the journal shows OOM kills, run one worker (`systemctl disable --now agent-worker@2`) or move to e2-small.
-- Cloud routines may refuse sub-hourly crons; if so the manager runs as two hourly routines offset by 30 minutes, sharing the board's lock.
+- The routine API refuses sub-hourly crons, so the manager is two hourly routines (:13 and :43) sharing the board's lock; see manager/ROUTINE.md.
 - The bundle cap is 800 KB of text per deliverable; bigger work must be split by the manager.
