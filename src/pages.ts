@@ -81,6 +81,11 @@ export function renderStatusPage(s: BoardStatus, now: number): string {
   <section class="card"><h2>Blocked</h2><ul>${list(s.blocked, (r) => esc(r.last_error ?? ""), "nothing blocked")}</ul></section>
 </div>
 <section class="card"><h2>Log</h2><ul>${events}</ul></section>
+<section class="card"><h2>Where to look</h2><ul>
+<li><b>This page</b> — refreshes every 60 s; each task links to its spec, reviews, report and files. <a href="/api/status">JSON</a>.</li>
+<li><b>Manager runs</b> — Claude routines <a href="https://claude.ai/code/routines/trig_0144Fo1i6xENAvLa58h3BBQ1" rel="noopener">:13</a> and <a href="https://claude.ai/code/routines/trig_019wCc3dqf85HAAtkfDTwUtG" rel="noopener">:43</a> (owner login; every run is a full session transcript). Their verdicts appear in the log below as <code>task.accept</code>, <code>task.reject</code>, <code>tasks.create</code> and <code>run</code>.</li>
+<li><b>Worker sessions</b> — the opencode web UI on the VM (SSH tunnel, see the README), or the transcript link on a task page when session sharing is on.</li>
+<li><b>Source and goals</b> — <a href="https://github.com/yukewF2023/yuke-persistent-agent-flow" rel="noopener">github.com/yukewF2023/yuke-persistent-agent-flow</a> (GOALS.md is the only human input).</li></ul></section>
 <footer>How it works: a human writes goals in the repo. The manager (Claude, a scheduled routine) turns them into tasks with acceptance criteria, keeps the board stocked, and reviews every deliverable by running its tests: accept, send back with notes, or split. Two workers (DeepSeek V4.1 Flash inside opencode on a small VM) pull tasks continuously, paced by the OpenCode Go allowance. Sessions are disposable; this board is the memory.</footer>`;
   return shell("Agent board", body, 60);
 }
@@ -97,7 +102,7 @@ export function renderTaskPage(d: { task: TaskRow & { deps: number[] }; reviews:
   <h3>Acceptance criteria</h3><pre>${esc(t.acceptance)}</pre>
 </section>
 <section class="card" style="margin-top:14px"><h2>Reviews</h2><ul>${d.reviews.length ? d.reviews.map((r) => `<li><time>${when(r.created_at)}</time>${statusPill(r.verdict === "accept" ? "accepted" : "rejected")} attempt ${r.attempt} · ${esc(r.who)}${r.notes ? `<pre>${esc(r.notes)}</pre>` : ""}</li>`).join("") : "<li class=\"muted\">not reviewed yet</li>"}</ul></section>
-<section class="card" style="margin-top:14px"><h2>Deliverable ${d.deliverable ? `<small>attempt ${d.deliverable.attempt} · ${d.deliverable.nfiles} files · ${Math.round(d.deliverable.bytes / 1024)} KB${d.deliverable.truncated ? " · truncated" : ""}</small>` : ""}</h2>
+<section class="card" style="margin-top:14px"><h2>Deliverable ${d.deliverable ? `<small>attempt ${d.deliverable.attempt} · ${d.deliverable.nfiles} files · ${Math.round(d.deliverable.bytes / 1024)} KB${d.deliverable.truncated ? " · truncated" : ""}${d.deliverable.session_url ? ` · <a href="${esc(d.deliverable.session_url)}" rel="noopener">worker session transcript ↗</a>` : d.deliverable.session_id ? ` · session ${esc(d.deliverable.session_id)}` : ""}</small>` : ""}</h2>
   ${d.deliverable ? `<h3>Report</h3><pre>${esc(d.deliverable.report)}</pre><h3>Files</h3>${files.map(([p, c]) => `<details><summary>${esc(p)} <span class="muted">(${c.length} chars)</span></summary><pre>${esc(c)}</pre></details>`).join("") || "<span class=\"muted\">no files</span>"}` : "<span class=\"muted\">nothing submitted yet</span>"}
 </section>`;
   return shell(`${t.key} · Agent board`, body, null);

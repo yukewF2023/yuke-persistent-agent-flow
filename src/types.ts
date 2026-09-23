@@ -64,6 +64,8 @@ export interface DeliverableRow {
   truncated: number;
   steps: number;
   session_id: string | null;
+  /** Public transcript link when session sharing is enabled on the worker VM. */
+  session_url: string | null;
   worker_id: string | null;
   created_at: number;
 }

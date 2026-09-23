@@ -53,7 +53,7 @@ echo "== template dependencies"
 echo "== opencode config + credential for the agent user"
 install -d -o agent -g agent /home/agent/.config/opencode /home/agent/.local/share/opencode
 cat > /home/agent/.config/opencode/opencode.json <<JSON
-{ "\$schema": "https://opencode.ai/config.json", "model": "$(grep '^OPENCODE_MODEL=' /etc/agent-worker.env | cut -d= -f2- || echo opencode-go/deepseek-v4.1-flash)", "permission": "allow", "share": "disabled", "autoupdate": false }
+{ "\$schema": "https://opencode.ai/config.json", "model": "$(grep '^OPENCODE_MODEL=' /etc/agent-worker.env | cut -d= -f2- || echo opencode-go/deepseek-v4.1-flash)", "permission": "allow", "share": "$(grep '^OPENCODE_SHARE=' /etc/agent-worker.env | cut -d= -f2- | grep -E '^(auto|manual|disabled)$' || echo disabled)", "autoupdate": false }
 JSON
 key="$(grep '^OPENCODE_API_KEY=' /etc/agent-worker.env | cut -d= -f2-)"
 [ -n "$key" ] || { echo "OPENCODE_API_KEY missing in /etc/agent-worker.env"; exit 1; }
@@ -63,9 +63,10 @@ chown -R agent:agent /srv/work /srv/templates /srv/lock /home/agent
 
 echo "== systemd"
 install -m 644 "$SRC/agent-worker@.service" /etc/systemd/system/agent-worker@.service
+install -m 644 "$SRC/opencode-web.service" /etc/systemd/system/opencode-web.service
 systemctl daemon-reload
-systemctl enable --now agent-worker@1 agent-worker@2
-systemctl restart agent-worker@1 agent-worker@2
+systemctl enable --now opencode-web agent-worker@1 agent-worker@2
+systemctl restart opencode-web agent-worker@1 agent-worker@2
 sleep 3
 systemctl --no-pager --lines=3 status agent-worker@1 agent-worker@2 || true
 echo "== done. Logs: journalctl -u agent-worker@1 -u agent-worker@2 -f"

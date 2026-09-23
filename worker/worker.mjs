@@ -18,6 +18,7 @@ const MODEL = env.OPENCODE_MODEL ?? "opencode-go/deepseek-v4.1-flash";
 const WORK_ROOT = env.WORK_ROOT ?? "/srv/work";
 const TEMPLATES = env.TEMPLATES ?? "/srv/templates";
 const POLL_S = Number(env.POLL_S ?? 60);
+const SESSION_API = env.OPENCODE_SERVER_URL ?? "http://127.0.0.1:4096"; // opencode-web.service; used only to read a session's share link
 const HEARTBEAT_S = Number(env.HEARTBEAT_S ?? 120);
 const FILES_MAX_BYTES = 800_000;
 const FILES_MAX_COUNT = 200;
@@ -59,10 +60,23 @@ function peakMultiplier(ts) {
   if (dow === 0 || dow === 6) return 1;
   return (h >= 1 && h < 4) || (h >= 6 && h < 10) ? 2 : 1;
 }
+// opencode reports `input` as the uncached prompt tokens and `cache.read` separately (verified against its session API).
 function stepCost(tokens, ts) {
-  const cached = tokens.cacheRead;
-  const uncached = Math.max(0, tokens.input - cached);
-  return (peakMultiplier(ts) * (uncached * PRICE.input + cached * PRICE.cacheRead + (tokens.output + tokens.reasoning) * PRICE.output)) / 1e6;
+  return (peakMultiplier(ts) * (tokens.input * PRICE.input + tokens.cacheRead * PRICE.cacheRead + (tokens.output + tokens.reasoning) * PRICE.output)) / 1e6;
+}
+
+/** If session sharing is enabled, the local opencode server knows the public transcript URL. */
+async function sessionShareUrl(sessionID) {
+  if (!sessionID) return null;
+  try {
+    const res = await fetch(`${SESSION_API}/session`, { signal: AbortSignal.timeout(5_000) });
+    if (!res.ok) return null;
+    const list = await res.json();
+    const s = Array.isArray(list) ? list.find((x) => x.id === sessionID) : null;
+    return s?.share?.url ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // ---- workspace ----
@@ -303,7 +317,7 @@ async function runTask(claim) {
       log(`export fallback failed: ${err.message}`);
     }
   }
-  const usage = { steps, tokens_in: tokens.input, tokens_out: tokens.output + tokens.reasoning, tokens_cached: tokens.cacheRead, cost_usd: Number(cost.toFixed(6)), session_id: sessionID, duration_s: durationS };
+  const usage = { steps, tokens_in: tokens.input, tokens_out: tokens.output + tokens.reasoning, tokens_cached: tokens.cacheRead, cost_usd: Number(cost.toFixed(6)), session_id: sessionID, session_url: await sessionShareUrl(sessionID), duration_s: durationS };
   const outDir = join(ws, "out");
   const collected = collectFiles(outDir);
   const reportPath = join(outDir, "REPORT.md");

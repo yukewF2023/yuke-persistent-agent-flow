@@ -91,6 +91,10 @@ export class Board extends DurableObject<Env> {
       CREATE INDEX IF NOT EXISTS spend_ts ON spend(ts);
       CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
     `);
+    // additive migrations (SQLite has no ADD COLUMN IF NOT EXISTS)
+    try {
+      this.ctx.storage.sql.exec("ALTER TABLE deliverables ADD COLUMN session_url TEXT");
+    } catch {}
   }
 
   // ---- entry ----
@@ -342,7 +346,7 @@ export class Board extends DurableObject<Env> {
     const tout = num(body.tokens_out);
     const tcached = num(body.tokens_cached);
     this.run(
-      "INSERT INTO deliverables(task_id, attempt, report, files, bytes, nfiles, truncated, steps, session_id, worker_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(task_id, attempt) DO UPDATE SET report = excluded.report, files = excluded.files, bytes = excluded.bytes, nfiles = excluded.nfiles, truncated = excluded.truncated, steps = excluded.steps, session_id = excluded.session_id, worker_id = excluded.worker_id, created_at = excluded.created_at",
+      "INSERT INTO deliverables(task_id, attempt, report, files, bytes, nfiles, truncated, steps, session_id, session_url, worker_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(task_id, attempt) DO UPDATE SET report = excluded.report, files = excluded.files, bytes = excluded.bytes, nfiles = excluded.nfiles, truncated = excluded.truncated, steps = excluded.steps, session_id = excluded.session_id, session_url = excluded.session_url, worker_id = excluded.worker_id, created_at = excluded.created_at",
       task.id,
       task.attempt,
       report,
@@ -352,6 +356,7 @@ export class Board extends DurableObject<Env> {
       body.truncated ? 1 : 0,
       steps,
       str(body.session_id, 80) || null,
+      /^https:\/\//.test(str(body.session_url, 300)) ? str(body.session_url, 300) : null,
       workerId,
       now
     );
