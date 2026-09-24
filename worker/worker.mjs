@@ -258,7 +258,9 @@ async function runTask(claim) {
     setTimeout(() => child.kill("SIGKILL"), 15_000).unref();
   }, task.max_minutes * 60_000);
   const stallTimer = setInterval(() => {
-    if (Date.now() - lastEventAt > STALL_MINUTES * 60_000) {
+    // startup (server boot + first model reply) gets double the grace on a slow box; after the first event, STALL_MINUTES applies
+    const allowedMs = (steps === 0 && tools === 0 ? 2 * STALL_MINUTES : STALL_MINUTES) * 60_000;
+    if (Date.now() - lastEventAt > allowedMs) {
       stalled = true;
       log(`no opencode event for ${STALL_MINUTES} min (${steps} steps so far); stopping opencode`);
       child.kill("SIGTERM");
@@ -306,6 +308,11 @@ async function runTask(claim) {
   clearTimeout(timer);
   clearInterval(stallTimer);
   current = null;
+  if (stopping) {
+    // shutdown() already released the task (attempt not consumed); do not also report a failure
+    log(`stopping: task #${task.id} left to the release`);
+    return;
+  }
   const durationS = Math.round((Date.now() - started) / 1000);
   log(`opencode exited ${exitCode} after ${durationS}s: ${steps} steps, ${tools} tool calls, ${tokens.input + tokens.output} tokens, $${cost.toFixed(4)}${sessionID ? ` (session ${sessionID})` : ""}`);
 
