@@ -114,7 +114,7 @@ PY
   tasks-add)     sendfile POST /manager/tasks "${1:?tasks.json}" | j ;;
   task-edit)     send PATCH "/manager/tasks/${1:?task id}" "${2:?json}" | j ;;
   cancel)        send PATCH "/manager/tasks/${1:?task id}" '{"status":"cancelled","force":true}' | j ;;
-  goals-sync)    python3 - "${1:-$HERE/GOALS.md}" <<'PY' > /tmp/board-goals.json
+  goals-sync)    gf="${1:-$HERE/GOALS.md}"; python3 - "$gf" <<'PY' > /tmp/board-goals.json
 import json,re,sys
 text=open(sys.argv[1]).read(); goals=[]; cur=None
 for line in text.split("\n"):
@@ -130,7 +130,8 @@ for line in text.split("\n"):
     cur["body"]+=line+"\n"
 json.dump(goals,sys.stdout)
 PY
-                 sendfile PUT /manager/goals /tmp/board-goals.json | j ;;
+                 gh=$(python3 -c 'import hashlib,sys;print(hashlib.md5(open(sys.argv[1],"rb").read()).hexdigest())' "$gf")
+                 sendfile PUT /manager/goals /tmp/board-goals.json | python3 -c 'import json,sys;d=json.load(sys.stdin);d["goals_md_hash"]=sys.argv[1];print(json.dumps(d,indent=4))' "$gh" ;;
   memory)        get /manager/memory | j ;;
   memory-put)    python3 -c 'import json,sys;print(json.dumps({"memory":json.load(open(sys.argv[1]))}))' "${1:?memory.json}" > /tmp/board-memory.json; sendfile PUT /manager/memory /tmp/board-memory.json | j ;;
   pace)          if [ -n "${1:-}" ]; then send PUT /manager/pace "{\"usd_per_day\":$1}" | j; else get /manager/pace | j; fi ;;

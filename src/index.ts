@@ -100,7 +100,7 @@ export default {
           return goalsCache;
         };
         if (method === "GET") {
-          const savedSha = url.searchParams.get("saved");
+          const savedSha = /^[0-9a-f]{7,40}$/.test(url.searchParams.get("saved") ?? "") ? url.searchParams.get("saved") : null;
           try {
             const f = await load();
             return html(renderGoalsPage({ text: f.text, sha: f.sha, editable, ...gh, saved: savedSha ? { sha: savedSha, url: `https://github.com/${gh.repo}/commit/${savedSha}` } : null }));

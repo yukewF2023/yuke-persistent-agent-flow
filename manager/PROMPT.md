@@ -10,7 +10,7 @@ A run starts on the schedule, after a push to `main` (the transcript then opens 
 1. `chmod +x scripts/board.sh && scripts/board.sh lock 1500` — if the reply says `locked`, another run is active: stop here.
 2. `scripts/board.sh status` — goals, counts, workers, spend versus pace, review queue, blocked tasks, needs-human, recent events.
 3. `scripts/board.sh memory` — your memory from the last run (small JSON: per-goal catalog cursor, concerns, run count).
-4. `cat GOALS.md`, then `scripts/board.sh goals-sync` (idempotent; a goal section removed from the file is paused on the board, and paused or done goals hand out no tasks). Keep a short hash of GOALS.md in your memory: when it changed since the last run, re-read each active goal's body and reconcile the board with it before planning: cancel `ready` tasks that no longer fit the goal (`scripts/board.sh cancel <id>`), re-spec ready tasks whose acceptance rules changed (`task-edit`), and treat new catalog items or new goals as planning input. Say what you reconciled in the run event.
+4. `cat GOALS.md`, then `scripts/board.sh goals-sync` (idempotent; a goal section removed from the file is paused on the board, and paused or done goals hand out no tasks). Its output includes `goals_md_hash`, the md5 of the file: store it in your memory as `goals_md_hash`, and when it differs from the stored one, re-read each active goal's body and reconcile the board with it before planning: cancel `ready` tasks that no longer fit the goal (`scripts/board.sh cancel <id>`), re-spec ready tasks whose acceptance rules changed (`task-edit`), and treat new catalog items or new goals as planning input. Say what you reconciled in the run event.
 
 ## 1. Review (do this before planning)
 For each task waiting for review, oldest first, at most 8 per run:
@@ -31,7 +31,7 @@ Three independent rules, applied every run:
 - **Goal A backfill (only when A's `ready` count is below its `min_ready`)**: take the next catalog items from GOALS.md after your memory cursor (`cursor.A`, an item name), skipping keys that already exist (`scripts/board.sh tasks "" A` lists them). Write one task per item to `/tmp/tasks.json` using the templates below, then `scripts/board.sh tasks-add /tmp/tasks.json`. Advance the cursor in memory.
 - **Goal B ports (always, regardless of ready counts)**: for every accepted `A/<cat>/<name>` with no `B/<cat>/<name>` task, add one with `"deps": ["A/<cat>/<name>"]` and `"kind": "py"`.
 - **Cross-checks (always, regardless of ready counts)**: for every pair where `A/…` and `B/…` are both accepted and no `X/<cat>/<name>` exists, add one with `"kind": "check"`, `"max_minutes": 30` and both keys as deps.
-Compare with `scripts/board.sh tasks "" B` and `scripts/board.sh tasks "" X`-style listings (filter the full list by key prefix) so nothing is duplicated; the board also rejects duplicate keys.
+Compare with `scripts/board.sh tasks "" B` (B/… and X/… tasks both belong to goal B, so filter that listing by key prefix; `tasks "" X` is empty) so nothing is duplicated; the board also rejects duplicate keys.
 
 Task JSON (array): `{"goal_id":"A","key":"A/sorting/merge-sort","kind":"ts","title":"merge sort","priority":5,"max_minutes":45,"spec":"…","acceptance":"…"}`
 
