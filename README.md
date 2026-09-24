@@ -16,6 +16,29 @@ Think of a small team with one manager and two junior engineers who never sleep.
 
 Nothing remembers anything between sessions except the board: every opencode session and every manager run starts from scratch and reads the board. The board itself is durable SQLite inside a Cloudflare Durable Object, and the VM downloads a full copy every night to `/srv/backups`.
 
+## Board vocabulary
+
+A task moves through these states:
+
+| State | Meaning |
+|---|---|
+| ready | on the board, waiting for a worker; claimable only once every task it depends on is accepted, and only while its goal is active |
+| claimed | a worker took it and holds a lease (45 minutes, extended by heartbeats) while it prepares the folder |
+| running | the opencode session is going |
+| review | the worker handed in files plus a report; waiting for the manager |
+| accepted | the manager ran the checks and approved; final |
+| blocked | the task used up its attempts, or a dependency was cancelled or blocked; it sits still and appears under *needs a human* until someone re-readies, splits or cancels it |
+| cancelled | retired on purpose, for example after the manager split it into smaller tasks; never retried |
+| rejected | the manager marked a rejection as final; never retried (rare) |
+
+**Dropped**, in the goals table on the status page, is cancelled plus rejected: tasks that ended without ever being accepted.
+
+**Attempt**: one worker claim plus one fresh opencode session on the task. An attempt ends in a submission (which goes to review) or a failure (crash, stall, timeout, or no files produced). A rejected review sends the task back to `ready` with the reviewer's numbered notes and spends the attempt; the retry starts from the previous attempt's files and only has to fix what the notes say. Tasks get 3 attempts by default (the manager or a human can raise it), then they are blocked.
+
+**Worker counters**: *done* is the number of submissions that worker handed in for review, *failed* the number of its attempts that ended without a submission. Neither says anything about quality; the goals table's *accepted* column does.
+
+**Lease**: while a worker holds a task it heartbeats every two minutes; if the worker dies, the lease expires and the task returns to `ready` on its own.
+
 ## Where to look
 
 | What | Where |

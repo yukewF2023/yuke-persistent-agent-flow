@@ -75,7 +75,7 @@ export function renderStatusPage(s: BoardStatus, now: number): string {
     <h3>Needs a human</h3>${needs}
   </section>
 </div>
-<section class="card"><h2>Goals</h2><table><tr><th>goal</th><th>ready</th><th>in progress</th><th>review</th><th>accepted</th><th>blocked</th><th>dropped</th></tr>${goals}</table>
+<section class="card"><h2>Goals</h2><table><tr><th>goal</th><th>ready</th><th>in progress</th><th>review</th><th>accepted</th><th>blocked</th><th title="cancelled + rejected: retired without ever being accepted; never retried">dropped</th></tr>${goals}</table>
 <div class="kv"><span>all tasks: ready <b>${c("ready")}</b></span><span>in progress <b>${inProgress}</b></span><span>review <b>${c("review")}</b></span><span>accepted <b>${c("accepted")}</b></span><span>blocked <b>${c("blocked")}</b></span></div></section>
 <div class="grid" style="margin-top:14px">
   <section class="card"><h2>In progress</h2><ul>${list(s.running, (r) => `${esc(r.worker_id ?? "?")} · since ${ago(r.claimed_at, now)} · attempt ${r.attempt}`, "nothing running")}</ul></section>
