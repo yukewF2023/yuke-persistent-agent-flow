@@ -21,11 +21,11 @@ gcloud compute ssh agent-workers --zone=us-east1-b -- 'sudo bash /tmp/worker/ins
 Re-run the same two commands to update `worker.mjs`, the templates or the unit file.
 
 ## Watch the workers' sessions
-The VM runs opencode's web UI on `127.0.0.1:4096` (service `opencode-web`). It lists every session the workers ran, with the full transcript, tool calls, tokens and cost. Open it through an SSH tunnel:
+Each worker has its own opencode data directory (`/srv/agent/xdg-1`, `/srv/agent/xdg-2`, so two sessions never share one SQLite file) and its own read-only web UI: worker 1 on `127.0.0.1:4091`, worker 2 on `127.0.0.1:4092` (services `opencode-web@1`, `opencode-web@2`). Each lists that worker's sessions with the full transcript, tool calls, tokens and cost. Open both through one SSH tunnel:
 ```bash
-gcloud compute ssh agent-workers --zone=us-east1-b -- -N -L 4096:127.0.0.1:4096
+gcloud compute ssh agent-workers --zone=us-east1-b -- -N -L 4091:127.0.0.1:4091 -L 4092:127.0.0.1:4092
 ```
-then browse http://localhost:4096 (leave the command running; Ctrl-C closes the tunnel).
+then browse http://localhost:4091 and http://localhost:4092 (leave the command running; Ctrl-C closes the tunnel).
 
 Optional public transcript links: set `OPENCODE_SHARE=auto` in `worker/agent-worker.env`, re-run the install, and every task page on the board gets a "worker session transcript" link (opencode.ai share pages are public; the task content is open-source algorithm code).
 

@@ -56,23 +56,31 @@ echo "== template dependencies"
 (cd /srv/templates/ts && npm install --no-audit --no-fund >/dev/null)
 [ -x /srv/templates/py/.venv/bin/pytest ] || { python3 -m venv /srv/templates/py/.venv && /srv/templates/py/.venv/bin/pip install -q -r /srv/templates/py/requirements.txt; }
 
-echo "== opencode config + credential for the agent user"
+echo "== opencode config + credential for the agent user (one data dir per worker)"
 install -d -o agent -g agent /home/agent/.config/opencode /home/agent/.local/share/opencode
+# migrate the first night's shared session store into worker 1's data dir, once
+if [ ! -d /srv/agent/xdg-1/opencode ] && [ -d /home/agent/.local/share/opencode ]; then
+  install -d -o agent -g agent /srv/agent/xdg-1 && cp -a /home/agent/.local/share/opencode /srv/agent/xdg-1/opencode
+fi
 cat > /home/agent/.config/opencode/opencode.json <<JSON
 { "\$schema": "https://opencode.ai/config.json", "model": "$(grep '^OPENCODE_MODEL=' /etc/agent-worker.env | cut -d= -f2- || echo opencode-go/deepseek-v4.1-flash)", "permission": "allow", "share": "$(grep '^OPENCODE_SHARE=' /etc/agent-worker.env | cut -d= -f2- | grep -E '^(auto|manual|disabled)$' || echo disabled)", "autoupdate": false }
 JSON
 key="$(grep '^OPENCODE_API_KEY=' /etc/agent-worker.env | cut -d= -f2-)"
 [ -n "$key" ] || { echo "OPENCODE_API_KEY missing in /etc/agent-worker.env"; exit 1; }
-printf '{"opencode-go":{"type":"api","key":"%s"}}\n' "$key" > /home/agent/.local/share/opencode/auth.json
-chmod 600 /home/agent/.local/share/opencode/auth.json
-chown -R agent:agent /srv/work /srv/templates /srv/lock /home/agent
+for d in /home/agent/.local/share/opencode /srv/agent/xdg-1/opencode /srv/agent/xdg-2/opencode; do
+  install -d -o agent -g agent "$d"
+  printf '{"opencode-go":{"type":"api","key":"%s"}}\n' "$key" > "$d/auth.json"
+  chmod 600 "$d/auth.json"
+done
+chown -R agent:agent /srv/work /srv/templates /srv/lock /srv/agent/xdg-1 /srv/agent/xdg-2 /home/agent
 
 echo "== systemd"
 install -m 644 "$SRC/agent-worker@.service" /etc/systemd/system/agent-worker@.service
-install -m 644 "$SRC/opencode-web.service" /etc/systemd/system/opencode-web.service
+install -m 644 "$SRC/opencode-web@.service" /etc/systemd/system/opencode-web@.service
+if systemctl list-unit-files opencode-web.service >/dev/null 2>&1; then systemctl disable --now opencode-web.service 2>/dev/null || true; rm -f /etc/systemd/system/opencode-web.service; fi
 systemctl daemon-reload
-systemctl enable --now opencode-web agent-worker@1 agent-worker@2
-systemctl restart opencode-web agent-worker@1 agent-worker@2
+systemctl enable --now opencode-web@1 opencode-web@2 agent-worker@1 agent-worker@2
+systemctl restart opencode-web@1 opencode-web@2 agent-worker@1 agent-worker@2
 sleep 3
-systemctl --no-pager --lines=3 status agent-worker@1 agent-worker@2 || true
+systemctl --no-pager --lines=3 status agent-worker@1 agent-worker@2 opencode-web@1 opencode-web@2 || true
 echo "== done. Logs: journalctl -u agent-worker@1 -u agent-worker@2 -f"

@@ -1,17 +1,18 @@
 [Unit]
-Description=opencode web UI (read-only view of worker sessions on 127.0.0.1:4096)
+Description=opencode web UI for worker %i (read-only view of its sessions on 127.0.0.1:409%i)
 After=network-online.target
 
 [Service]
 User=agent
 Group=agent
 Environment=HOME=/home/agent
+Environment=XDG_DATA_HOME=/srv/agent/xdg-%i
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=OPENCODE_DISABLE_AUTOUPDATE=1
-ExecStart=/usr/bin/opencode serve --port 4096 --hostname 127.0.0.1
+ExecStart=/usr/bin/opencode serve --port 409%i --hostname 127.0.0.1
 Restart=always
 RestartSec=10
-MemoryMax=300M
+MemoryMax=200M
 Nice=10
 
 [Install]

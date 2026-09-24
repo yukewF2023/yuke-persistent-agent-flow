@@ -9,6 +9,9 @@ Group=agent
 EnvironmentFile=/etc/agent-worker.env
 Environment=WORKER_ID=%H-%i
 Environment=HOME=/home/agent
+# each worker has its own opencode data dir (sessions + SQLite) so concurrent workers never share a database
+Environment=XDG_DATA_HOME=/srv/agent/xdg-%i
+Environment=OPENCODE_SERVER_URL=http://127.0.0.1:409%i
 Environment=WORK_ROOT=/srv/work
 Environment=TEMPLATES=/srv/templates
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
@@ -18,7 +21,7 @@ Restart=always
 RestartSec=15
 TimeoutStopSec=90
 KillMode=mixed
-MemoryMax=450M
+MemoryMax=700M
 Nice=5
 
 [Install]

@@ -18,7 +18,8 @@ const MODEL = env.OPENCODE_MODEL ?? "opencode-go/deepseek-v4.1-flash";
 const WORK_ROOT = env.WORK_ROOT ?? "/srv/work";
 const TEMPLATES = env.TEMPLATES ?? "/srv/templates";
 const POLL_S = Number(env.POLL_S ?? 60);
-const SESSION_API = env.OPENCODE_SERVER_URL ?? "http://127.0.0.1:4096"; // opencode-web.service; used only to read a session's share link
+const SESSION_API = env.OPENCODE_SERVER_URL ?? "http://127.0.0.1:4091"; // this worker's opencode-web@ instance; used only to read a session's share link
+const STALL_MINUTES = Number(env.STALL_MINUTES ?? 12); // no opencode event for this long → kill and fail fast (the 45-min budget is for real work)
 const HEARTBEAT_S = Number(env.HEARTBEAT_S ?? 120);
 const FILES_MAX_BYTES = 800_000;
 const FILES_MAX_COUNT = 200;
@@ -234,6 +235,8 @@ async function runTask(claim) {
   let stderrTail = "";
   let timedOut = false;
   let leaseLost = false;
+  let stalled = false;
+  let lastEventAt = Date.now();
 
   const prompt = "Read TASK.md in this directory and do exactly what it says. Work until the acceptance criteria are met, then make sure out/REPORT.md exists.";
   const args = ["run", "--auto", "--format", "json", "--model", MODEL, "--dir", ws, "--title", `task-${task.id}-${safeName(task.key)}`, prompt];
@@ -254,6 +257,15 @@ async function runTask(claim) {
     child.kill("SIGTERM");
     setTimeout(() => child.kill("SIGKILL"), 15_000).unref();
   }, task.max_minutes * 60_000);
+  const stallTimer = setInterval(() => {
+    if (Date.now() - lastEventAt > STALL_MINUTES * 60_000) {
+      stalled = true;
+      log(`no opencode event for ${STALL_MINUTES} min (${steps} steps so far); stopping opencode`);
+      child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), 15_000).unref();
+      clearInterval(stallTimer);
+    }
+  }, 30_000);
 
   const rl = createInterface({ input: child.stdout });
   rl.on("line", (line) => {
@@ -265,6 +277,7 @@ async function runTask(claim) {
       return;
     }
     if (ev.sessionID) sessionID = ev.sessionID;
+    lastEventAt = Date.now();
     const part = ev.part ?? {};
     if (ev.type === "step_finish") {
       steps++;
@@ -291,6 +304,7 @@ async function runTask(claim) {
   const exitCode = await new Promise((resolve) => child.on("close", resolve));
   clearInterval(hb);
   clearTimeout(timer);
+  clearInterval(stallTimer);
   current = null;
   const durationS = Math.round((Date.now() - started) / 1000);
   log(`opencode exited ${exitCode} after ${durationS}s: ${steps} steps, ${tools} tool calls, ${tokens.input + tokens.output} tokens, $${cost.toFixed(4)}${sessionID ? ` (session ${sessionID})` : ""}`);
@@ -333,9 +347,10 @@ async function runTask(claim) {
       renameSync(ws, keep);
     } catch {}
   };
+  if (stalled && collected.count === 0) return fail(`stalled: no opencode event for ${STALL_MINUTES} min (${steps} steps, exit ${exitCode})${lastError ? `: ${lastError}` : ""}`);
   if (timedOut && collected.count === 0) return fail(`timed out after ${task.max_minutes} min with no files under out/ (${steps} steps)`);
   if (collected.count === 0) return fail(`opencode exited ${exitCode} without writing any file under out/${lastError ? `: ${lastError}` : ""}`);
-  if (timedOut) report += `\nNOTE: the time budget ran out; this may be incomplete.`;
+  if (timedOut || stalled) report += `\nNOTE: ${stalled ? "the session stalled and was stopped" : "the time budget ran out"}; this may be incomplete.`;
   const sub = await api("POST", `/worker/tasks/${task.id}/submit`, { worker_id: WORKER_ID, attempt: task.attempt, report: report.slice(0, 60_000), files: collected.files, truncated: collected.truncated, ...usage });
   if (!sub.ok) {
     log(`submit failed (${sub.status}): ${sub.text.slice(0, 200)}`);

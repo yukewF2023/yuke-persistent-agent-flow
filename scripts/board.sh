@@ -72,7 +72,7 @@ def write(base,files,report):
     if report: open(os.path.join(base,"REPORT.md"),"w").write(report)
 if dl: write(root,dl["files"],dl["report"])
 for dep in t["deps"]:
-    req=urllib.request.Request(f"{url}/manager/tasks/{dep}",headers={"Authorization":"Bearer "+tok})
+    req=urllib.request.Request(f"{url}/manager/tasks/{dep}",headers={"Authorization":"Bearer "+tok,"User-Agent":"board.sh/0.2 (curl-equivalent)"})
     d=json.load(urllib.request.urlopen(req)); dd=d.get("deliverable")
     if dd: write(os.path.join(root,"deps",safe(d["task"]["key"])),dd["files"],dd["report"])
 print(f"TASK #{t['id']} {t['key']} kind={t['kind']} attempt={t['attempt']}/{t['max_attempts']} goal={t['goal_id']} title={t['title']}")
@@ -95,8 +95,8 @@ def write(base,files,report):
     if report: open(os.path.join(base,"REPORT.md"),"w").write(report)
 if dl: write(root,dl["files"],dl["report"])
 for dep in t["deps"]:
-    req=urllib.request.Request(f"{url}/manager/tasks/{dep}",headers={"Authorization":"Bearer "+tok}); dd=json.load(urllib.request.urlopen(req)).get("deliverable")
-    if dd: write(os.path.join(root,"deps",safe(json.load(urllib.request.urlopen(urllib.request.Request(f"{url}/manager/tasks/{dep}",headers={"Authorization":"Bearer "+tok})))["task"]["key"])),dd["files"],dd["report"])
+    req=urllib.request.Request(f"{url}/manager/tasks/{dep}",headers={"Authorization":"Bearer "+tok,"User-Agent":"board.sh/0.2 (curl-equivalent)"}); dd=json.load(urllib.request.urlopen(req)).get("deliverable")
+    if dd: write(os.path.join(root,"deps",safe(json.load(urllib.request.urlopen(urllib.request.Request(f"{url}/manager/tasks/{dep}",headers={"Authorization":"Bearer "+tok,"User-Agent":"board.sh/0.2 (curl-equivalent)"})))["task"]["key"])),dd["files"],dd["report"])
 print(root)
 PY
                  ;;
