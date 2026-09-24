@@ -46,6 +46,8 @@ A task moves through these states:
 | The board, in tabs: **Overview** (workers, spend, manager, goals table, needs-a-human), **Board** (ready / in progress / review / accepted / blocked columns), **Workers** (live view), **Goals** (the goal bodies), **Log** (events, filterable by kind), **Spend** (Go windows, last 7 days, Cloudflare free tier) | https://yuke-persistent-agent-flow.yuke-521.workers.dev — the tab is in the URL hash (`/#board`, `/#workers`, `/#log`…), so a bookmark opens straight to it; with JavaScript off the same page shows every section top to bottom |
 | One task: spec, acceptance checklist, every review verdict, the report and the files | click any task on the board (`/tasks/<id>`) |
 | What a worker is doing right now: step, current tool call, tokens and cost so far, the last 30 session events | the [Workers tab](https://yuke-persistent-agent-flow.yuke-521.workers.dev/#workers) (refreshes every 20 s) and the "Live session" section of the running task's page; JSON at `/api/live` and `/api/tasks/<id>/progress` |
+| Editing the goals | https://yuke-persistent-agent-flow.yuke-521.workers.dev/goals — GOALS.md in a form; Save makes one commit on `main` (needs the board token and, once, a GitHub token on the Worker: see [manager/ROUTINE.md](manager/ROUTINE.md) and the page itself); git history at https://github.com/yukewF2023/yuke-persistent-agent-flow/commits/main/GOALS.md |
+| Waking the manager now | any push to `main` fires it within about a minute (GitHub trigger); the "Wake the manager now" button in the Manager card or `scripts/board.sh wake` (once the routine's API trigger is configured); details in [manager/ROUTINE.md](manager/ROUTINE.md) |
 | The manager's runs, with full transcripts | https://claude.ai/code/routines/trig_0144Fo1i6xENAvLa58h3BBQ1 (:13) and https://claude.ai/code/routines/trig_019wCc3dqf85HAAtkfDTwUtG (:43) |
 | The workers' full opencode transcripts | opencode web UI on the VM through an SSH tunnel, see [worker/README.md](worker/README.md); or public transcript links on task pages when `OPENCODE_SHARE=auto` |
 | Raw worker logs | `gcloud compute ssh agent-workers --zone=us-east1-b -- 'sudo journalctl -u agent-worker@1 -u agent-worker@2 -f'` |
@@ -57,19 +59,19 @@ A task moves through these states:
 ```
 Yuke ── edits GOALS.md ──▶ repo ◀── cloned each run ──┐
                                                        │
-Claude routine (Sonnet 5, every 30 min) ───────────────┼── Bearer ORCHESTRATOR_TOKEN ──▶ Cloudflare Worker: the board
+Claude routine (Sonnet 5, every 30 min + on push) ─────┼── Bearer ORCHESTRATOR_TOKEN ──▶ Cloudflare Worker: the board
   plan · dispatch · review · replan                    │                                  (Durable Object + SQLite)
                                                        │                                  public status page
 GCP e2-micro VM: agent-worker@1, agent-worker@2 ───────┴── Bearer WORKER_TOKEN ─────────▶ claim · heartbeat · submit · deps
   each task = one fresh `opencode run` (DeepSeek V4.1 Flash via OpenCode Go)
 ```
 
-1. **Goals** live in [GOALS.md](GOALS.md). A human edits that file and nothing else.
+1. **Goals** live in [GOALS.md](GOALS.md). A human edits that file and nothing else, on the board's `/goals` page or with git; every push to `main` wakes the manager.
 2. **The manager** ([manager/PROMPT.md](manager/PROMPT.md)) is a Claude Code cloud routine. Every 30 minutes it syncs the goals, **reviews** each finished task by running its tests in its own sandbox (accept, send back with concrete fixes, or split), and **plans** new tasks from the goal catalog so the board never runs dry. It writes a small JSON memory to the board and never keeps a transcript.
 3. **The workers** ([worker/](worker/)) are two systemd services on one small VM. Each claims the next ready task (dependencies accepted, spend within pace), builds a workspace from a template, writes `TASK.md`, runs `opencode run --auto --format json` with DeepSeek V4.1 Flash, bundles everything under `out/` plus `out/REPORT.md`, and submits it for review. Leases, heartbeats and attempts make crashes harmless.
 4. **The board** ([src/board.ts](src/board.ts)) is one Durable Object: goals, tasks, deliverables, reviews, events, workers, spend. The public page shows what each worker is doing (live: step, tool call, cost so far, the last session events), the review queue, accepted work, blocked tasks, spend against pace, and what needs a human.
 
-"Persistent" means the board always has ready tasks and the workers always pull the next one. "Little oversight" means the only human inputs are `GOALS.md` and the *needs a human* list on the page.
+"Persistent" means the board always has ready tasks and the workers always pull the next one. "Little oversight" means the only human inputs are `GOALS.md` (the `/goals` editor commits it) and the *needs a human* list on the page.
 
 ## Cost
 
@@ -96,8 +98,8 @@ Workers: see [worker/README.md](worker/README.md) (three gcloud commands). Manag
 
 - `scripts/board.sh status` — the whole board in one screen; `scripts/board.sh` alone lists every command (tasks, task, accept, reject, tasks-add, pace, needs-human, events…).
 - `scripts/monitor.sh` — one-shot health snapshot with anomalies.
-- `scripts/board.sh manager-now` — run the manager loop from a laptop instead of waiting for the routine.
-- Edit [GOALS.md](GOALS.md) and push: the next manager run picks it up.
+- `scripts/board.sh manager-now` — run the manager loop from a laptop instead of waiting for the routine; `scripts/board.sh wake "why"` — start a cloud run now (see [manager/ROUTINE.md](manager/ROUTINE.md)).
+- Edit the goals on [/goals](https://yuke-persistent-agent-flow.yuke-521.workers.dev/goals) (one commit per save) or edit [GOALS.md](GOALS.md) and push: the push wakes the manager within about a minute.
 
 ## Layout
 

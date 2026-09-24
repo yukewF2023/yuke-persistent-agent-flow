@@ -666,11 +666,25 @@ export class Board extends DurableObject<Env> {
       return json(this.q<EventRow>("SELECT * FROM events WHERE id > ? ORDER BY id DESC LIMIT ?", since, limit));
     }
     if (p[0] === "event" && m === "POST") {
-      const body = await readJson<{ kind?: unknown; text?: unknown; task_id?: unknown }>(request);
+      const body = await readJson<{ kind?: unknown; text?: unknown; task_id?: unknown; actor?: unknown }>(request);
       const text = str(body.text, 500);
       if (!text) return json({ error: "text required" }, 400);
-      this.event("manager", str(body.kind, 40) || "note", body.task_id === undefined ? null : num(body.task_id), text);
+      this.event(str(body.actor, 40) || "manager", str(body.kind, 40) || "note", body.task_id === undefined ? null : num(body.task_id), text);
       if (str(body.kind, 40) === "run") this.kvSet("manager:last_run_at", String(now));
+      this.touch();
+      return json({ ok: true });
+    }
+    if (p[0] === "wake" && m === "POST") {
+      // The Worker fires the routine; the board only guards against double wakes and keeps the record.
+      const body = await readJson<{ who?: unknown; reason?: unknown; configured?: unknown }>(request);
+      const who = str(body.who, 40) || "human";
+      const reason = str(body.reason, 200) || "no reason given";
+      const lock = Number(this.kvGet("manager:lock_until") ?? 0);
+      if (lock > now) return json({ error: "the manager is running right now; it will pick up your change before it finishes", locked_until: lock }, 409);
+      const last = Number(this.kvGet("manager:last_wake") ?? 0);
+      if (now - last < 5 * 60_000) return json({ error: `the manager was woken ${Math.round((now - last) / 1000)} s ago; wait a few minutes`, last_wake: last }, 429);
+      this.kvSet("manager:last_wake", String(now));
+      this.event(who, "manager.wake", null, body.configured ? `wake requested (${reason})` : `wake requested (${reason}) but no instant trigger is configured; the next scheduled run is at :13 or :43 (see manager/ROUTINE.md)`);
       this.touch();
       return json({ ok: true });
     }

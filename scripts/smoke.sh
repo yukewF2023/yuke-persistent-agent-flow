@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end smoke test of the board API (58 checks). Usage, from the repo root with `npm run dev` running: scripts/smoke.sh http://localhost:8787
+# End-to-end smoke test of the board API (63 checks). Usage, from the repo root with `npm run dev` running: scripts/smoke.sh http://localhost:8787
 # Reads ORCHESTRATOR_TOKEN / WORKER_TOKEN from .dev.vars. Safe to re-run (unique task keys per run); wipe .wrangler/state between runs for a clean board.
 # Written for bash 3.2: every response is captured with R=$(...) first (no nested quotes inside "$(...)").
 set -u
@@ -84,4 +84,9 @@ R=$(curl -s "$U/"); check "status page html" '<h1>Agent board</h1>' "$R"; check 
 R=$(curl -s "$U/tasks/$ID1"); check "task page html" 'Acceptance criteria' "$R"
 R=$(code "$U/tasks/99999"); check "task 404 page" "404" "$R"
 R=$(curl -s "$U/api/tasks?status=accepted"); check "public list accepted" "T/one-$RUN" "$R"
+R=$(curl -s "$U/goals"); check "goals editor renders GOALS.md" '## Goal A' "$R"
+R=$(code -X POST "$U/goals" -d 'token=wrong&content=x&sha=y'); check "goals save needs the board token" "401" "$R"
+R=$(code -X POST "$U/wake" -d 'token=wrong'); check "wake needs the board token" "401" "$R"
+R=$(curl -s "${M[@]}" -X POST "$U/manager/wake" -d '{"reason":"smoke"}'); check "wake via CLI records the request" '"message"' "$R"
+R=$(code "${M[@]}" -X POST "$U/manager/wake" -d '{"reason":"smoke again"}'); check "second wake within 5 min refused" "429" "$R"
 echo; echo "passed $pass, failed $fail"

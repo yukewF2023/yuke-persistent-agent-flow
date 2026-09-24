@@ -26,6 +26,10 @@ nav.tabs{display:flex;gap:2px;flex-wrap:wrap;margin:0 0 16px;border-bottom:1px s
 .cols{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}.col h2 small{margin-left:4px}
 .filters{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:12.5px;margin:0 0 10px;align-items:center}.filters label{cursor:pointer;color:var(--muted)}.filters input[type=search]{font:inherit;font-size:12.5px;padding:3px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--fg);min-width:180px}
 .days td:not(:first-child){text-align:right;font-variant-numeric:tabular-nums}.more{color:var(--muted);font-size:12px;padding:4px 0}
+textarea,input[type=text],input[type=password]{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:6px 9px}textarea{width:100%;font:12.5px/1.45 ui-monospace,Menlo,monospace;min-height:60vh;resize:vertical}
+button{font:inherit;font-size:13px;padding:6px 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}button:hover{filter:brightness(1.1)}button.quiet{background:transparent;color:var(--accent)}
+.row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin:8px 0}.row label{font-size:12.5px;color:var(--muted)}.banner{padding:10px 14px;border-radius:10px;margin-bottom:14px;font-size:13.5px}.banner.ok{border:1px solid var(--ok)}.banner.bad{border:1px solid var(--bad)}.banner.warn{border:1px solid var(--warn)}
+.wakeform{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}.wakeform input{max-width:170px;font-size:12.5px;padding:4px 8px}.wakeform button{font-size:12.5px;padding:4px 12px}
 .live{font-size:12.5px;margin-top:3px}.feed{margin-top:4px}.feed li{font:12px/1.45 ui-monospace,Menlo,monospace;padding:2px 0;border-bottom:1px dotted var(--border)}.feed time{min-width:62px;display:inline-block}.feed q{quotes:none;color:var(--muted)}
 `;
 
@@ -35,8 +39,9 @@ nav.tabs{display:flex;gap:2px;flex-wrap:wrap;margin:0 0 16px;border-bottom:1px s
  */
 const STATUS_JS = `(function(){var b=document.body;b.className+=' js';
 var tabs=[].slice.call(document.querySelectorAll('.tab')),links=[].slice.call(document.querySelectorAll('nav.tabs a'));
-function show(){var h=(location.hash||'#overview').slice(1);if(!document.getElementById(h))h='overview';tabs.forEach(function(t){t.classList.toggle('active',t.id===h)});links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+h)})}
-window.addEventListener('hashchange',show);show();
+function show(){var h=(location.hash||'#overview').slice(1);if(!document.getElementById(h))h='overview';tabs.forEach(function(t){t.classList.toggle('active',t.id===h)});links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+h)});window.scrollTo(0,0)}
+window.addEventListener('hashchange',show);show();window.addEventListener('load',function(){setTimeout(function(){window.scrollTo(0,0)},0)});
+try{var tok=localStorage.getItem('board_token');if(tok){[].forEach.call(document.querySelectorAll('input[name=token]'),function(i){i.value=tok})}}catch(e){}
 var lists=[{el:document.getElementById('workers-live'),url:'/live/workers'},{el:document.getElementById('workers-live-full'),url:'/live/workers?open=1'}];
 function tick(){if(document.hidden||!window.fetch)return;lists.forEach(function(l){if(!l.el)return;var t=l.el.closest('.tab');if(t&&!t.classList.contains('active'))return;fetch(l.url,{cache:'no-store'}).then(function(r){return r.ok?r.text():null}).then(function(h){if(h)l.el.innerHTML=h}).catch(function(){})})}
 setInterval(tick,20000);
@@ -170,7 +175,8 @@ export function renderStatusPage(s: BoardStatus, now: number): string {
   const cfBar = (label: string, v: number, cap: number, capLabel: string) =>
     `<div class="bar"><span>${label}</span><div class="track"><div class="fill ${v / cap > 0.8 ? "hot" : ""}" style="width:${Math.min(100, (100 * v) / cap).toFixed(1)}%"></div></div><b>${v.toLocaleString()} / ${capLabel}</b></div>`;
   const pacingLine = sp.pacing ? `<span class="pill warn">pacing</span> <span class="muted">${esc(sp.pacing.reason)}</span>` : `<span class="pill ok">within pace</span>`;
-  const managerLine = `<div class="kv"><span>last run <b>${s.manager.lastRunAt ? ago(s.manager.lastRunAt, now) : "never"}</b></span><span>${s.manager.lockedUntil ? `<span class="pill accent">running now</span>` : `<span class="muted">next at :13 or :43</span>`}</span></div>`;
+  const managerLine = `<div class="kv"><span>last run <b>${s.manager.lastRunAt ? ago(s.manager.lastRunAt, now) : "never"}</b></span><span>${s.manager.lockedUntil ? `<span class="pill accent">running now</span>` : `<span class="muted">next at :13 or :43, or on the next push to main</span>`}</span></div>
+<form method="post" action="/wake" class="wakeform"><input type="password" name="token" placeholder="board token" autocomplete="current-password" required><input type="hidden" name="reason" value="button on the board"><button>Wake the manager now</button><span class="muted" style="font-size:12px">runs within about a minute · <a href="/goals">edit goals</a></span></form>`;
   const nav = `<nav class="tabs"><a href="#overview">Overview</a><a href="#board">Board<small>${c("ready")} · ${inProgress} · ${c("review")}</small></a><a href="#workers">Workers<small>${s.workers.length}</small></a><a href="#goals">Goals<small>${s.goals.length}</small></a><a href="#log">Log</a><a href="#spend">Spend<small>${usd(sp.todayUsd)}</small></a></nav>`;
 
   const overview = `<section class="tab" id="overview"><h2 class="tabtitle">Overview</h2>
@@ -192,7 +198,8 @@ export function renderStatusPage(s: BoardStatus, now: number): string {
 <li><b>One task</b> — click any task: spec, acceptance checklist, live session while it runs, every review verdict, the report and the files.</li>
 <li><b>Manager runs</b> — Claude routines <a href="https://claude.ai/code/routines/trig_0144Fo1i6xENAvLa58h3BBQ1" rel="noopener">:13</a> and <a href="https://claude.ai/code/routines/trig_019wCc3dqf85HAAtkfDTwUtG" rel="noopener">:43</a> (owner login; every run is a full session transcript). Their verdicts appear in the log as <code>task.accept</code>, <code>task.reject</code>, <code>tasks.create</code> and <code>run</code>.</li>
 <li><b>Worker transcripts</b> — the live view here shows tool calls and text excerpts; the full opencode transcript is in the web UI on the VM (SSH tunnel, see the README), or linked from the task page when session sharing is on.</li>
-<li><b>Source and goals</b> — <a href="https://github.com/yukewF2023/yuke-persistent-agent-flow" rel="noopener">github.com/yukewF2023/yuke-persistent-agent-flow</a> (GOALS.md is the only human input).</li></ul></section>
+<li><b>Goals</b> — <a href="/goals">/goals</a> edits GOALS.md as a commit on <code>main</code> (git history is the audit trail); the push wakes the manager within about a minute. Source: <a href="https://github.com/yukewF2023/yuke-persistent-agent-flow" rel="noopener">github.com/yukewF2023/yuke-persistent-agent-flow</a>.</li>
+<li><b>Waking the manager</b> — the button in the Manager card (needs the board token), <code>scripts/board.sh wake</code>, or any push to <code>main</code>.</li></ul></section>
 </section>`;
 
   const board = `<section class="tab" id="board"><h2 class="tabtitle">Board</h2>
@@ -217,7 +224,7 @@ export function renderStatusPage(s: BoardStatus, now: number): string {
 </section>`;
 
   const goalsTab = `<section class="tab" id="goals"><h2 class="tabtitle">Goals</h2>
-<p class="muted" style="font-size:12.5px;margin:0 0 10px">The goals come from <a href="https://github.com/yukewF2023/yuke-persistent-agent-flow/blob/main/GOALS.md" rel="noopener">GOALS.md</a> in the repository; the manager syncs them into the board on every run, plans tasks from each active goal's body, and pauses goals that were removed from the file.</p>
+<p class="muted" style="font-size:12.5px;margin:0 0 10px">The goals come from <a href="https://github.com/yukewF2023/yuke-persistent-agent-flow/blob/main/GOALS.md" rel="noopener">GOALS.md</a> in the repository; the manager syncs them into the board on every run, plans tasks from each active goal's body, and pauses goals that were removed from the file. <a href="/goals"><b>Edit GOALS.md →</b></a> (commits to the repo; the push wakes the manager).</p>
 ${
   s.goals.length
     ? s.goals
@@ -291,6 +298,66 @@ ${live}
   ${d.deliverable ? `<h3>Report</h3><pre>${esc(d.deliverable.report)}</pre><h3>Files</h3>${files.map(([p, c]) => `<details><summary>${esc(p)} <span class="muted">(${c.length} chars)</span></summary><pre>${esc(c)}</pre></details>`).join("") || "<span class=\"muted\">no files</span>"}` : "<span class=\"muted\">nothing submitted yet</span>"}
 </section>${active ? `<script>${LIVE_TASK_JS}</script>` : ""}`;
   return shell(`${t.key} · Agent board`, body, active ? 30 : null);
+}
+
+/** Script for the goals editor: remember the board token per browser, warn before leaving with unsaved edits, Ctrl/Cmd+S saves. */
+const GOALS_JS = `(function(){var f=document.getElementById('goals-form');if(!f)return;var t=f.querySelector('input[name=token]'),ta=f.querySelector('textarea'),orig=ta.value,dirty=false;
+try{var saved=localStorage.getItem('board_token');if(saved&&!t.value)t.value=saved}catch(e){}
+ta.addEventListener('input',function(){dirty=ta.value!==orig;var b=document.getElementById('goals-dirty');if(b)b.textContent=dirty?'unsaved changes':''});
+f.addEventListener('submit',function(){try{if(t.value)localStorage.setItem('board_token',t.value)}catch(e){}dirty=false});
+window.addEventListener('beforeunload',function(e){if(dirty){e.preventDefault();e.returnValue=''}});
+document.addEventListener('keydown',function(e){if((e.metaKey||e.ctrlKey)&&e.key==='s'){e.preventDefault();if(f.requestSubmit)f.requestSubmit();else f.submit()}});
+var forget=document.getElementById('forget-token');if(forget)forget.addEventListener('click',function(e){e.preventDefault();try{localStorage.removeItem('board_token')}catch(x){}t.value=''});
+})();`;
+
+/** /goals — GOALS.md as a form that commits to the repository (or read-only when no GitHub token is configured). */
+export function renderGoalsPage(d: {
+  text: string;
+  sha: string | null;
+  editable: boolean;
+  repo: string;
+  branch: string;
+  path: string;
+  error?: string | null;
+  saved?: { sha: string; url: string } | null;
+  loadError?: string | null;
+}): string {
+  const fileUrl = `https://github.com/${d.repo}/blob/${d.branch}/${d.path}`;
+  const historyUrl = `https://github.com/${d.repo}/commits/${d.branch}/${d.path}`;
+  const banner = d.saved
+    ? `<div class="banner ok">Saved as commit <a href="${esc(d.saved.url)}" rel="noopener"><code>${esc(d.saved.sha.slice(0, 7))}</code></a> on <code>${esc(d.branch)}</code>. The push wakes the manager: within a minute or two it re-reads the goals and reconciles the board (cancels ready tasks that no longer fit, re-specs changed acceptance rules, plans new items). Watch the <a href="/#log">log</a> for <code>run</code>.</div>`
+    : d.error
+      ? `<div class="banner bad">Not saved: ${esc(d.error)}</div>`
+      : d.loadError
+        ? `<div class="banner bad">Could not load ${esc(d.path)} from GitHub: ${esc(d.loadError)}</div>`
+        : "";
+  const setup = d.editable
+    ? ""
+    : `<div class="banner warn"><b>Read-only:</b> the board has no GitHub token, so this page cannot commit. To enable editing: create a <a href="https://github.com/settings/personal-access-tokens/new" rel="noopener">fine-grained personal access token</a> for the repository <code>${esc(d.repo)}</code> only, with <b>Contents: read and write</b> (nothing else), then run <code>npx wrangler secret put GITHUB_TOKEN</code> in the repo and paste it. Until then, edit <a href="${esc(fileUrl)}" rel="noopener">GOALS.md on GitHub</a> or push with git.</div>`;
+  const body = `
+<div class="top"><div><h1><a href="/">← board</a> · Goals editor</h1><span class="muted"><code>${esc(d.path)}</code> on <code>${esc(d.repo)}</code>@<code>${esc(d.branch)}</code> · <a href="${esc(fileUrl)}" rel="noopener">file</a> · <a href="${esc(historyUrl)}" rel="noopener">history</a> · <a href="/#goals">what the board has</a></span></div></div>
+${banner}${setup}
+<section class="card"><h2>How it works</h2><ul>
+<li>This file is the only human input. The manager (Claude) clones the repository fresh every run and syncs it into the board: one <code>## Goal &lt;id&gt;: &lt;title&gt;</code> section per goal; the lines <code>- status:</code> (active, paused or done), <code>- min_ready:</code> and <code>- done-when:</code> are parsed; everything else in the section is the goal body the manager plans from.</li>
+<li>Saving here makes one commit on <code>${esc(d.branch)}</code> (git history is the audit trail), and the push wakes the manager within about a minute. When the file changed since its last run, the manager reconciles the board before planning: it cancels ready tasks that no longer fit, re-specs ready tasks whose acceptance rules changed, and treats new catalog items or goals as planning input. Removing a section pauses that goal. Work in progress is never interrupted.</li>
+<li>The board token is the manager's <code>ORCHESTRATOR_TOKEN</code> (from <code>.dev.vars</code>); this browser remembers it once you save.</li></ul></section>
+<section class="card" style="margin-top:14px">
+<form id="goals-form" method="post" action="/goals">
+<input type="hidden" name="sha" value="${esc(d.sha ?? "")}">
+<textarea name="content" spellcheck="false" ${d.editable ? "" : "readonly"} aria-label="GOALS.md">${esc(d.text)}</textarea>
+<div class="row"><label>commit message <input type="text" name="message" value="GOALS.md: edit from the board" size="40" ${d.editable ? "" : "disabled"}></label><label>board token <input type="password" name="token" autocomplete="current-password" required ${d.editable ? "" : "disabled"}></label><a href="#" id="forget-token" class="muted" style="font-size:12px">forget token</a></div>
+<div class="row"><button ${d.editable ? "" : "disabled"}>Save to ${esc(d.branch)}</button><span id="goals-dirty" class="muted" style="font-size:12.5px"></span></div>
+</form></section>
+<script>${GOALS_JS}</script>`;
+  return shell("Goals editor · Agent board", body, null);
+}
+
+/** Result of the wake button (plain page so it works without JS). */
+export function renderWakeResult(d: { ok: boolean; message: string; sessionUrl?: string | null; status: number }): string {
+  const body = `<div class="top"><div><h1><a href="/">← board</a> · Wake the manager</h1></div></div>
+<div class="banner ${d.ok ? "ok" : d.status === 200 || d.status === 409 || d.status === 429 ? "warn" : "bad"}">${esc(d.message)}${d.sessionUrl ? ` <a href="${esc(d.sessionUrl)}" rel="noopener">open the run ↗</a>` : ""}</div>
+<p class="muted">Other ways to wake it: push to <code>main</code> (the GitHub trigger fires the routine), <code>scripts/board.sh wake "reason"</code>, or wait for the :13 / :43 schedule. Details in <code>manager/ROUTINE.md</code>.</p>`;
+  return shell("Wake · Agent board", body, null);
 }
 
 export function renderNotFound(): string {

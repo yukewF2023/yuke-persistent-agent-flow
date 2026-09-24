@@ -142,6 +142,7 @@ PY
   lock)          send POST /manager/lock "{\"ttl_s\":${1:-1500}}" | j ;;
   unlock)        send DELETE /manager/lock | j ;;
   prune)         send POST /manager/prune | j ;;
+  wake)          send POST /manager/wake "{\"who\":\"cli\",\"reason\":$(printf '%s' "${1:-scripts/board.sh wake}" | jstr)}" | j ;;
   manager-now)   command -v claude >/dev/null || { echo "claude CLI not found"; exit 1; }
                  export WORKER_URL ORCHESTRATOR_TOKEN
                  cd "$HERE" && claude -p "$(cat manager/PROMPT.md)" --allowedTools "Bash,Read,Write,Glob,Grep" ;;

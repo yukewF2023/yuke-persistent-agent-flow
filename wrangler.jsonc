@@ -7,6 +7,8 @@
   "compatibility_date": "2026-09-01",
   "workers_dev": true,
   "observability": { "enabled": true, "head_sampling_rate": 1 },
+  // Non-secret config. The /goals editor commits GOALS.md to this repo and branch (the one the manager routine clones).
+  "vars": { "GITHUB_REPO": "yukewF2023/yuke-persistent-agent-flow", "GITHUB_BRANCH": "main" },
 
   // The task board: one SQLite-backed Durable Object ("main").
   "durable_objects": {
@@ -17,5 +19,7 @@
     // v2 (2026-09-23): the worklist agents are gone; their data is deleted with the classes.
     { "tag": "v2", "deleted_classes": ["UptimeAgent", "WeekendScoutAgent", "TeamState"], "new_sqlite_classes": ["Board"] }
   ]
-  // Secrets (wrangler secret put): ORCHESTRATOR_TOKEN (manager), WORKER_TOKEN (workers).
+  // Secrets (wrangler secret put): ORCHESTRATOR_TOKEN (manager), WORKER_TOKEN (workers);
+  // optional GITHUB_TOKEN (fine-grained PAT, contents read/write, for the /goals editor) and
+  // MANAGER_FIRE_URL + MANAGER_FIRE_TOKEN (the routine's API trigger, for the wake button).
 }

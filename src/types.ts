@@ -5,6 +5,15 @@ export interface Env {
   ORCHESTRATOR_TOKEN: string;
   /** Bearer token for /worker/* (the DeepSeek worker processes). */
   WORKER_TOKEN: string;
+  /** Optional: fine-grained GitHub PAT (contents: read/write on GITHUB_REPO) that lets the /goals page commit GOALS.md. */
+  GITHUB_TOKEN?: string;
+  /** owner/name of the repository the manager clones (wrangler.jsonc vars). */
+  GITHUB_REPO?: string;
+  /** Branch the manager reads (default main). */
+  GITHUB_BRANCH?: string;
+  /** Optional: the manager routine's API-trigger endpoint (…/routines/<id>/fire) and its bearer token, for the wake button. */
+  MANAGER_FIRE_URL?: string;
+  MANAGER_FIRE_TOKEN?: string;
 }
 
 export type Role = "public" | "manager" | "worker";
