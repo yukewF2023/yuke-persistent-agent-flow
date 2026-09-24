@@ -15,7 +15,7 @@ const CF_ROWS_READ_LIMIT = 5_000_000;
 const CF_ROWS_WRITTEN_LIMIT = 100_000;
 const CF_READ_SOFT_LIMIT = 4_500_000;
 const METER_FLUSH_MS = 60_000;
-/** Live progress snapshots: one small row per task, overwritten on every post (a worker posts at most every 20 s). */
+/** Live progress snapshots: one small row per task, overwritten on every post (a worker posts at most every 30 s); no index, so a post writes one row. */
 const PROGRESS_MAX_EVENTS = 30;
 const PROGRESS_MAX_BYTES = 12_000;
 const PROGRESS_KEEP_MS = 3 * 86_400_000;
@@ -35,6 +35,9 @@ export class Board extends DurableObject<Env> {
   /** Row-read/write meter (Cloudflare free-tier budget). Pending deltas are flushed to kv about once a minute. */
   private meterPending = { reads: 0, writes: 0 };
   private meterStored: { day: string; reads: number; writes: number; at: number } | null = null;
+  /** Set by requests that arrive every few seconds (progress posts): the meter may then flush once a minute instead of per request. */
+  private meterLazy = false;
+  private meterFlushedAt = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -72,13 +75,23 @@ export class Board extends DurableObject<Env> {
     }
     return { day, reads: this.meterStored.reads + this.meterPending.reads, writes: this.meterStored.writes + this.meterPending.writes };
   }
-  /** Flush after every request that touched rows: the DO can be evicted within seconds, so buffering would undercount. */
+  /**
+   * Flush after every request that touched rows: the DO can be evicted within seconds, so buffering would undercount.
+   * Exception: progress posts arrive every 20–30 s per worker and keep the object alive, so they flush at most once a minute
+   * (one kv write instead of one per post; a rare eviction loses a few counts of the meter, nothing else).
+   */
   private flushMeter(now = Date.now()) {
     if (this.meterPending.reads + this.meterPending.writes === 0) return;
+    if (this.meterLazy && now - this.meterFlushedAt < METER_FLUSH_MS) {
+      this.meterLazy = false;
+      return;
+    }
+    this.meterLazy = false;
     const m = this.meterToday(now);
     this.kvSet(`meter:${m.day}`, JSON.stringify({ reads: m.reads + 1, writes: m.writes + 1 }));
     this.meterStored = { day: m.day, reads: m.reads, writes: m.writes, at: now };
     this.meterPending = { reads: 0, writes: 0 };
+    this.meterFlushedAt = now;
   }
   /** Spend is kept as running totals per UTC day and month so pacing never sums the spend table. */
   private addSpend(now: number, taskId: number, attempt: number, usd: number, tokens: number) {
@@ -137,7 +150,7 @@ export class Board extends DurableObject<Env> {
       CREATE INDEX IF NOT EXISTS spend_ts ON spend(ts);
       CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS progress (task_id INTEGER PRIMARY KEY, attempt INTEGER NOT NULL, worker_id TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, body TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS progress_updated ON progress(updated_at);
+      DROP INDEX IF EXISTS progress_updated;
     `);
     // additive migrations (SQLite has no ADD COLUMN IF NOT EXISTS)
     try {
@@ -499,6 +512,7 @@ export class Board extends DurableObject<Env> {
       snap.events.shift();
       text = JSON.stringify(snap);
     }
+    this.meterLazy = true;
     this.run(
       "INSERT INTO progress(task_id, attempt, worker_id, done, updated_at, body) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(task_id) DO UPDATE SET attempt = excluded.attempt, worker_id = excluded.worker_id, done = excluded.done, updated_at = excluded.updated_at, body = excluded.body",
       task.id,

@@ -21,9 +21,10 @@ const POLL_S = Number(env.POLL_S ?? 60);
 const SESSION_API = env.OPENCODE_SERVER_URL ?? "http://127.0.0.1:4091"; // this worker's opencode-web@ instance; used only to read a session's share link
 const STALL_MINUTES = Number(env.STALL_MINUTES ?? 12); // no opencode event for this long → kill and fail fast (the 45-min budget is for real work)
 const HEARTBEAT_S = Number(env.HEARTBEAT_S ?? 120);
-// live progress for the board's Workers view: one small snapshot per task, overwritten on the board; at most one post every PROGRESS_MIN_S
-const PROGRESS_MIN_S = Number(env.PROGRESS_MIN_S ?? 20);
-const PROGRESS_MAX_S = Number(env.PROGRESS_MAX_S ?? 30);
+// live progress for the board's Workers view: one small snapshot per task, overwritten on the board.
+// Posted when a step finishes, at most every PROGRESS_MIN_S, and at least every PROGRESS_MAX_S while something changed (about 1 row write per post).
+const PROGRESS_MIN_S = Number(env.PROGRESS_MIN_S ?? 30);
+const PROGRESS_MAX_S = Number(env.PROGRESS_MAX_S ?? 45);
 const PROGRESS_EVENTS = 30;
 const FILES_MAX_BYTES = 800_000;
 const FILES_MAX_COUNT = 200;

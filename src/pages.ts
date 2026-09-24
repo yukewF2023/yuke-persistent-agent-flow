@@ -215,7 +215,7 @@ export function renderStatusPage(s: BoardStatus, now: number): string {
 
   const workersTab = `<section class="tab" id="workers"><h2 class="tabtitle">Workers</h2>
 <section class="card"><h2>Live <small>refreshes every 20 s while this tab is open</small></h2>
-<p class="muted" style="font-size:12.5px;margin:0 0 8px">Each worker posts a snapshot of its running opencode session after every finished step (at most every 20 s): the step number, the tool call in progress, tokens and cost so far, and the last 30 events. Done and failed are attempt counters (submitted for review / ended without a submission), not quality: see the goals table for accepted work.</p>
+<p class="muted" style="font-size:12.5px;margin:0 0 8px">Each worker posts a snapshot of its running opencode session after every finished step (at most every 30 s): the step number, the tool call in progress, tokens and cost so far, and the last 30 events. Done and failed are attempt counters (submitted for review / ended without a submission), not quality: see the goals table for accepted work.</p>
 <ul id="workers-live-full">${renderWorkersLive(s, now, true)}</ul></section>
 <section class="card" style="margin-top:14px"><h2>Full transcripts</h2><ul>
 <li>opencode web UI on the VM: <code>gcloud compute ssh agent-workers --zone=us-east1-b -- -N -L 4091:127.0.0.1:4091 -L 4092:127.0.0.1:4092</code>, then http://localhost:4091 (worker 1) and http://localhost:4092 (worker 2).</li>
