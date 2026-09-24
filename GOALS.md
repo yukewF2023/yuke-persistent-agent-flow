@@ -10,7 +10,7 @@ Format: one `## Goal <id>: <title>` section per goal. The lines `- status:`, `- 
 
 Purpose: a small, well-tested library, one module per catalog item, each with unit tests, a doc comment and a micro-benchmark. No network. MIT.
 
-Task shape (one catalog item = one task, key `A/<category>/<name>`, kind `ts`, 30 minutes, priority 5):
+Task shape (one catalog item = one task, key `A/<category>/<name>`, kind `ts`, 45 minutes, priority 5):
 - `out/src/<category>/<name>.ts` — the implementation; exported functions or classes with a JSDoc block that states the complexity.
 - `out/src/<category>/<name>.test.ts` — vitest; normal cases, edge cases (empty, single element, duplicates, negative or huge values), and where sensible a randomized test against a naive reference implementation.
 - `out/bench/<category>/<name>.bench.ts` — a tiny timing script runnable with `npx tsx`, no dependencies.
@@ -42,10 +42,10 @@ Catalog (work top to bottom; the manager keeps `min_ready` tasks open):
 Purpose: the same catalog in Python 3.11+, one module per item, each with pytest tests (hypothesis where sensible), then one cross-check task per pair that runs both implementations on random inputs and fails on any disagreement. This gives the manager an objective signal that neither worker can game alone.
 
 Task shapes:
-- `B/<category>/<name>` (kind `py`, 30 minutes, deps: the accepted `A/<category>/<name>`; its files appear under `deps/`): `out/py/<category>/<name>.py`, `out/tests/test_<name>.py` (at least 8 tests including edge cases), `out/README.md`. Acceptance: `.venv/bin/pytest -q` passes; same public behaviour and, where possible, the same function names as the TypeScript module; type hints; no third-party runtime dependencies.
-- `X/<category>/<name>` (kind `check`, 20 minutes, deps: the accepted A and B twins): `out/xcheck/<name>/gen.py` (deterministic random cases, seeds 1 to 200, printed as JSON lines), `out/xcheck/<name>/run_ts.ts` and `out/xcheck/<name>/run_py.py` (read cases from stdin, print one JSON result per line), `out/xcheck/<name>/check.sh` (runs both with `npx tsx` and `.venv/bin/python`, diffs the outputs, exits 1 on any mismatch), `out/REPORT.md` with the case count and any mismatch. Acceptance: `bash out/xcheck/<name>/check.sh` exits 0 over at least 200 cases.
+- `B/<category>/<name>` (kind `py`, 45 minutes, deps: the accepted `A/<category>/<name>`; its files appear under `deps/`): `out/py/<category>/<name>.py`, `out/tests/test_<name>.py` (at least 8 tests including edge cases), `out/README.md`. Acceptance: `.venv/bin/pytest -q` passes; same public behaviour and, where possible, the same function names as the TypeScript module; type hints; no third-party runtime dependencies.
+- `X/<category>/<name>` (kind `check`, 30 minutes, deps: the accepted A and B twins): `out/xcheck/<name>/gen.py` (deterministic random cases, seeds 1 to 200, printed as JSON lines), `out/xcheck/<name>/run_ts.ts` and `out/xcheck/<name>/run_py.py` (read cases from stdin, print one JSON result per line), `out/xcheck/<name>/check.sh` (runs both with `npx tsx` and `.venv/bin/python`, diffs the outputs, exits 1 on any mismatch), `out/REPORT.md` with the case count and any mismatch. Acceptance: `bash out/xcheck/<name>/check.sh` exits 0 over at least 200 cases.
 The manager creates a B task only after its A twin is accepted, and an X task only after both twins are accepted.
 
 ## Pace and sizing
 - Daily spend target $1.60 (80 % of OpenCode Go's $60 per month). The manager may move it between $0.50 and $2.50 with `scripts/board.sh pace`.
-- Tasks are at most 30 minutes and 3 attempts. Anything bigger gets split.
+- Tasks get 45 minutes (the e2-micro is slow: a session that takes 1 minute on a laptop takes 10 to 25 here) and 3 attempts. Anything bigger gets split.

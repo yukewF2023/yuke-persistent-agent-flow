@@ -12,6 +12,6 @@
 - Backups: `/srv/backups/board-<date>.json` on the VM, daily 01:17 UTC, 14 days kept (`sudo board-backup` to run now).
 
 ## Known limits
-- e2-micro has 1 GB RAM: test runs are serialized through `./run-tests` (flock) and each worker has MemoryMax=450M. If the journal shows OOM kills, run one worker (`systemctl disable --now agent-worker@2`) or move to e2-small.
+- e2-micro has 1 GB RAM and a quarter vCPU: test runs are serialized through `./run-tests` (flock), each worker has MemoryMax=450M, swap is 2 GB. First night: no OOM kills, but ~800 MB of swap in use and 8–25 min per task (a laptop does the same task in 1 min). Task budgets are 45 min for that reason. If tasks start timing out or the journal shows OOM kills, run one worker (`systemctl disable --now agent-worker@2`) or resize to e2-small (~$12/month).
 - The routine API refuses sub-hourly crons, so the manager is two hourly routines (:13 and :43) sharing the board's lock; see manager/ROUTINE.md.
 - The bundle cap is 800 KB of text per deliverable; bigger work must be split by the manager.
