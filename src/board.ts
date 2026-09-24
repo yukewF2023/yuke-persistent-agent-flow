@@ -353,7 +353,7 @@ export class Board extends DurableObject<Env> {
       this.run("UPDATE workers SET note = ? WHERE id = ?", `pacing: ${spend.pacing.reason}`, workerId);
       return json({ task: null, reason: spend.pacing.reason, retry_after_s: spend.pacing.retryAfterS, pacing: true });
     }
-    const candidates = this.q<TaskRow>("SELECT * FROM tasks WHERE status = 'ready' ORDER BY priority, id LIMIT 20");
+    const candidates = this.q<TaskRow>("SELECT t.* FROM tasks t JOIN goals g ON g.id = t.goal_id WHERE t.status = 'ready' AND g.status = 'active' ORDER BY t.priority, t.id LIMIT 20");
     let waiting = 0;
     for (const c of candidates) {
       const deps = (JSON.parse(c.deps) as number[]).filter((d) => Number.isInteger(d));
@@ -380,8 +380,10 @@ export class Board extends DurableObject<Env> {
       this.event(`worker:${workerId}`, "task.claim", c.id, `${c.key}: claimed (attempt ${task.attempt})`);
       const reviews = this.q<Pick<ReviewRow, "attempt" | "verdict" | "notes" | "created_at">>("SELECT attempt, verdict, notes, created_at FROM reviews WHERE task_id = ? ORDER BY id DESC LIMIT 3", c.id);
       const depInfo = deps.map((d) => this.one<{ id: number; key: string; kind: string; attempt: number }>("SELECT id, key, kind, attempt FROM tasks WHERE id = ?", d)).filter(Boolean);
+      const prev = task.attempt > 1 ? this.one<DeliverableRow>("SELECT * FROM deliverables WHERE task_id = ? AND attempt < ? ORDER BY attempt DESC LIMIT 1", c.id, task.attempt) : undefined;
+      const previous = prev ? { attempt: prev.attempt, report: prev.report, files: JSON.parse(prev.files) as Record<string, string> } : null;
       this.touch();
-      return json({ task: { ...task, deps }, reviews, deps: depInfo, lease_until: now + lease });
+      return json({ task: { ...task, deps }, reviews, deps: depInfo, previous, lease_until: now + lease });
     }
     const reason = candidates.length ? (waiting ? `${waiting} ready task(s) waiting on dependencies` : "no claimable task") : "no ready tasks";
     this.run("UPDATE workers SET note = ? WHERE id = ?", `idle: ${reason}`, workerId);
@@ -471,9 +473,11 @@ export class Board extends DurableObject<Env> {
       const body = await readJson<unknown>(request);
       const list = (Array.isArray(body) ? body : (body as { goals?: unknown[] })?.goals ?? []) as Record<string, unknown>[];
       let n = 0;
+      const seen: string[] = [];
       for (const g of list) {
         const id = str(g.id, 40);
         if (!id) continue;
+        seen.push(id);
         this.run(
           "INSERT INTO goals(id, title, body, done_when, min_ready, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title = excluded.title, body = excluded.body, done_when = excluded.done_when, min_ready = excluded.min_ready, status = excluded.status, updated_at = excluded.updated_at",
           id,
@@ -487,8 +491,16 @@ export class Board extends DurableObject<Env> {
         );
         n++;
       }
+      const paused: string[] = [];
+      if (seen.length) {
+        for (const g of this.q<{ id: string }>(`SELECT id FROM goals WHERE status = 'active' AND id NOT IN (${seen.map(() => "?").join(",")})`, ...seen)) {
+          this.run("UPDATE goals SET status = 'paused', updated_at = ? WHERE id = ?", now, g.id);
+          this.event("manager", "goal.paused", null, `goal ${g.id} is no longer in GOALS.md; paused (its ready tasks stay on the board but are not handed out)`);
+          paused.push(g.id);
+        }
+      }
       this.touch();
-      return json({ upserted: n });
+      return json({ upserted: n, paused });
     }
     if (p[0] === "tasks" && !p[1] && m === "GET") return json(this.listTasks(url));
     if (p[0] === "tasks" && !p[1] && m === "POST") return this.createTasks(await readJson<unknown>(request), now);

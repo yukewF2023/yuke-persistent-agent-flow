@@ -92,7 +92,7 @@ function link(target, path) {
     log(`symlink ${path} failed: ${err.message}`);
   }
 }
-function prepareWorkspace(task, deps) {
+function prepareWorkspace(task, deps, previous) {
   const ws = join(WORK_ROOT, `${task.id}-a${task.attempt}`);
   rmSync(ws, { recursive: true, force: true });
   mkdirSync(ws, { recursive: true });
@@ -111,6 +111,16 @@ function prepareWorkspace(task, deps) {
     chmodSync(join(ws, "run-tests"), 0o755);
   }
   mkdirSync(join(ws, "out"), { recursive: true });
+  // a retry starts from the previous attempt's files (seeded into out/) instead of a blank folder
+  let seeded = 0;
+  for (const [p, content] of Object.entries(previous?.files ?? {})) {
+    const rel = p.replace(/^\/+/, "").replace(/\.\.(\/|$)/g, "");
+    if (!rel.startsWith("out/")) continue;
+    const target = join(ws, rel);
+    mkdirSync(join(target, ".."), { recursive: true });
+    writeFileSync(target, content);
+    seeded++;
+  }
   const depLines = [];
   for (const d of deps ?? []) {
     const dir = join(ws, "deps", safeName(d.key));
@@ -123,9 +133,9 @@ function prepareWorkspace(task, deps) {
     if (d.report) writeFileSync(join(dir, "REPORT.md"), d.report);
     depLines.push(`- deps/${safeName(d.key)}/ — accepted deliverable of task #${d.id} (${d.key})`);
   }
-  return { ws, depLines };
+  return { ws, depLines, seeded };
 }
-function taskMarkdown(task, reviews, depLines) {
+function taskMarkdown(task, reviews, depLines, seeded) {
   const prior = (reviews ?? []).filter((r) => r.verdict === "reject" && r.notes);
   return [
     `# Task ${task.key}: ${task.title}`,
@@ -138,6 +148,7 @@ function taskMarkdown(task, reviews, depLines) {
     `## Acceptance criteria (the reviewer checks every line)`,
     task.acceptance.trim(),
     prior.length ? `\n## Notes from the previous review (that attempt was rejected — fix these first)\n${prior.map((r) => `- attempt ${r.attempt}: ${r.notes}`).join("\n")}` : "",
+    seeded ? `\n## Your previous attempt is already in out/ (${seeded} files)\nDo not start over: read what is there, fix exactly what the review notes ask, re-run the tests, and update out/REPORT.md.` : "",
     depLines.length ? `\n## Dependencies available in this workspace\n${depLines.join("\n")}` : "",
     ``,
     `## Rules for this workspace`,
@@ -207,7 +218,7 @@ let stopping = false;
 let current = null; // { task, child }
 
 async function runTask(claim) {
-  const { task, reviews, deps: depMeta } = claim;
+  const { task, reviews, deps: depMeta, previous } = claim;
   log(`claimed #${task.id} ${task.key} (attempt ${task.attempt}, ${task.max_minutes} min)`);
   const deps = [];
   for (const d of depMeta ?? []) {
@@ -215,8 +226,9 @@ async function runTask(claim) {
     if (r.ok && r.json) deps.push({ id: d.id, key: d.key, files: r.json.files, report: r.json.report });
     else log(`dependency #${d.id} bundle unavailable: ${r.status}`);
   }
-  const { ws, depLines } = prepareWorkspace(task, deps);
-  writeFileSync(join(ws, "TASK.md"), taskMarkdown(task, reviews, depLines));
+  const { ws, depLines, seeded } = prepareWorkspace(task, deps, previous);
+  writeFileSync(join(ws, "TASK.md"), taskMarkdown(task, reviews, depLines, seeded));
+  if (seeded) log(`seeded out/ with ${seeded} files from attempt ${previous.attempt}`);
   const started = Date.now();
   const startRes = await api("POST", `/worker/tasks/${task.id}/start`, { worker_id: WORKER_ID });
   if (!startRes.ok) {

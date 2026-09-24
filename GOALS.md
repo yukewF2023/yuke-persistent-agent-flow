@@ -1,7 +1,7 @@
 # Goals
 
-Owned by Yuke. The manager syncs this file into the board on every run (`scripts/board.sh goals-sync`).
-Format: one `## Goal <id>: <title>` section per goal. The lines `- status:`, `- min_ready:` and `- done-when:` are parsed; everything else in the section is the goal body the manager plans from.
+Owned by Yuke. The manager syncs this file into the board on every run (`scripts/board.sh goals-sync`), so editing it and pushing to `main` is all it takes: the next run (within 30 minutes) picks up new goals, new catalog items and changed rules, and reconciles the board.
+Format: one `## Goal <id>: <title>` section per goal. The lines `- status:` (`active`, `paused` or `done`; only active goals hand out tasks), `- min_ready:` (how many ready tasks the manager keeps queued) and `- done-when:` are parsed; everything else in the section is the goal body the manager plans from, so it should say what a task looks like and how the reviewer can check it. Removing a section pauses that goal.
 
 ## Goal A: TypeScript algorithms and data structures library
 - status: active

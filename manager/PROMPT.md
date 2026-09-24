@@ -8,7 +8,7 @@ Environment: `WORKER_URL` (the board) and `ORCHESTRATOR_TOKEN` are environment v
 1. `chmod +x scripts/board.sh && scripts/board.sh lock 1500` — if the reply says `locked`, another run is active: stop here.
 2. `scripts/board.sh status` — goals, counts, workers, spend versus pace, review queue, blocked tasks, needs-human, recent events.
 3. `scripts/board.sh memory` — your memory from the last run (small JSON: per-goal catalog cursor, concerns, run count).
-4. `cat GOALS.md`, then `scripts/board.sh goals-sync` (idempotent).
+4. `cat GOALS.md`, then `scripts/board.sh goals-sync` (idempotent; a goal section removed from the file is paused on the board, and paused or done goals hand out no tasks). Keep a short hash of GOALS.md in your memory: when it changed since the last run, re-read each active goal's body and reconcile the board with it before planning: cancel `ready` tasks that no longer fit the goal (`scripts/board.sh cancel <id>`), re-spec ready tasks whose acceptance rules changed (`task-edit`), and treat new catalog items or new goals as planning input. Say what you reconciled in the run event.
 
 ## 1. Review (do this before planning)
 For each task waiting for review, oldest first, at most 8 per run:
