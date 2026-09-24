@@ -681,7 +681,8 @@ export class Board extends DurableObject<Env> {
       if (task.status === "accepted") return json({ error: "accepted tasks are final" }, 409);
       sets.push("status = ?", "worker_id = NULL", "lease_until = NULL");
       params.push(target);
-      if (target === "ready" && task.attempt >= task.max_attempts) {
+      const newMax = body.max_attempts !== undefined ? Math.max(1, Math.min(6, num(body.max_attempts, 3))) : task.max_attempts;
+      if (target === "ready" && task.attempt >= newMax) {
         sets.push("max_attempts = ?");
         params.push(task.attempt + 1);
       }
