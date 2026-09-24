@@ -68,11 +68,11 @@ export class Board extends DurableObject<Env> {
     }
     return { day, reads: this.meterStored.reads + this.meterPending.reads, writes: this.meterStored.writes + this.meterPending.writes };
   }
+  /** Flush after every request that touched rows: the DO can be evicted within seconds, so buffering would undercount. */
   private flushMeter(now = Date.now()) {
     if (this.meterPending.reads + this.meterPending.writes === 0) return;
     const m = this.meterToday(now);
-    if (this.meterStored && now - this.meterStored.at < METER_FLUSH_MS && this.meterPending.reads < 5_000) return;
-    this.kvSet(`meter:${m.day}`, JSON.stringify({ reads: m.reads, writes: m.writes }));
+    this.kvSet(`meter:${m.day}`, JSON.stringify({ reads: m.reads + 1, writes: m.writes + 1 }));
     this.meterStored = { day: m.day, reads: m.reads, writes: m.writes, at: now };
     this.meterPending = { reads: 0, writes: 0 };
   }
