@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end smoke test of the board API (63 checks). Usage, from the repo root with `npm run dev` running: scripts/smoke.sh http://localhost:8787
+# End-to-end smoke test of the board API (65 checks). Usage, from the repo root with `npm run dev` running: scripts/smoke.sh http://localhost:8787
 # Reads ORCHESTRATOR_TOKEN / WORKER_TOKEN from .dev.vars. Safe to re-run (unique task keys per run); wipe .wrangler/state between runs for a clean board.
 # Written for bash 3.2: every response is captured with R=$(...) first (no nested quotes inside "$(...)").
 set -u
@@ -16,7 +16,8 @@ jget() { python3 -c "import json,sys;d=json.load(sys.stdin);print(eval(sys.argv[
 R=$(curl -s "$U/api/status"); check "status public" '"generatedAt"' "$R"
 R=$(code "$U/manager/tasks"); check "manager needs auth" "401" "$R"
 R=$(code -X POST "$U/worker/claim"); check "worker needs auth" "401" "$R"
-R=$(curl -s "${M[@]}" -X PUT "$U/manager/goals" -d '[{"id":"T","title":"Smoke goal","body":"test","min_ready":2}]'); check "goals upsert" '"upserted": 1' "$R"
+R=$(curl -s "${M[@]}" -X PUT "$U/manager/goals" -d '[{"id":"T","title":"Smoke goal","body":"test","min_ready":2,"catalog_size":12}]'); check "goals upsert" '"upserted": 1' "$R"
+R=$(curl -s "$U/api/status"); check "status has catalog size" '"catalog_size": 12' "$R"; check "status has accepted today" '"acceptedToday"' "$R"
 cat > $T/create.json <<J
 [{"goal_id":"T","key":"T/one-$RUN","title":"first","spec":"do one","acceptance":"- has out/REPORT.md","priority":1},
  {"goal_id":"T","key":"T/two-$RUN","title":"second","spec":"do two","acceptance":"- ok","priority":2,"max_attempts":2},

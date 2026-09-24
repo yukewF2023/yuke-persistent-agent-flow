@@ -119,7 +119,7 @@ import json,re,sys
 text=open(sys.argv[1]).read(); goals=[]; cur=None
 for line in text.split("\n"):
     m=re.match(r"^## Goal ([A-Za-z0-9_-]+): (.+)$",line)
-    if m: cur={"id":m.group(1),"title":m.group(2).strip(),"body":"","status":"active","min_ready":4,"done_when":None}; goals.append(cur); continue
+    if m: cur={"id":m.group(1),"title":m.group(2).strip(),"body":"","status":"active","min_ready":4,"done_when":None,"catalog_size":None,"_cat":False}; goals.append(cur); continue
     if cur is None: continue
     k=re.match(r"^- (status|min_ready|done-when): (.+)$",line)
     if k:
@@ -127,7 +127,14 @@ for line in text.split("\n"):
         if key=="status": cur["status"]=val
         elif key=="min_ready": cur["min_ready"]=int(val)
         else: cur["done_when"]=val
+    # catalog: the "Catalog" paragraph's "- category: item, item (note), item" lines; items are comma-separated outside parentheses
+    if re.match(r"^Catalog\b",line): cur["_cat"]=True
+    elif cur["_cat"] and not line.strip(): cur["_cat"]=False
+    elif cur["_cat"]:
+        c=re.match(r"^- [^:]+: (.+)$",line)
+        if c: cur["catalog_size"]=(cur["catalog_size"] or 0)+len([x for x in re.split(r",(?![^(]*\))",c.group(1)) if x.strip()])
     cur["body"]+=line+"\n"
+for g in goals: g.pop("_cat",None)
 json.dump(goals,sys.stdout)
 PY
                  gh=$(python3 -c 'import hashlib,sys;print(hashlib.md5(open(sys.argv[1],"rb").read()).hexdigest())' "$gf")

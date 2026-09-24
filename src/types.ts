@@ -27,6 +27,8 @@ export interface GoalRow {
   body: string;
   done_when: string | null;
   min_ready: number;
+  /** number of catalog items in the goal body (parsed by goals-sync), or null when the goal has no catalog */
+  catalog_size: number | null;
   status: "active" | "paused" | "done";
   created_at: number;
   updated_at: number;
@@ -169,7 +171,7 @@ export interface SpendSummary {
 export interface LiveStatus {
   generatedAt: number;
   workers: (WorkerRow & { task_key: string | null })[];
-  running: Pick<TaskRow, "id" | "key" | "title" | "worker_id" | "claimed_at" | "lease_until" | "attempt" | "status">[];
+  running: Pick<TaskRow, "id" | "key" | "title" | "worker_id" | "claimed_at" | "lease_until" | "attempt" | "status" | "max_minutes" | "goal_id">[];
   progress: Record<string, ProgressSnapshot>;
 }
 
@@ -181,10 +183,12 @@ export interface BoardStatus {
   workers: (WorkerRow & { task_key: string | null })[];
   /** the next ready tasks in claim order (priority, id), at most 20 */
   ready: Pick<TaskRow, "id" | "key" | "title" | "goal_id" | "priority" | "created_at" | "deps">[];
-  running: Pick<TaskRow, "id" | "key" | "title" | "worker_id" | "claimed_at" | "lease_until" | "attempt" | "status">[];
-  reviewQueue: Pick<TaskRow, "id" | "key" | "title" | "submitted_at" | "attempt">[];
-  recentAccepted: Pick<TaskRow, "id" | "key" | "title" | "finished_at" | "cost_usd" | "attempt">[];
-  blocked: Pick<TaskRow, "id" | "key" | "title" | "last_error" | "attempt">[];
+  running: Pick<TaskRow, "id" | "key" | "title" | "worker_id" | "claimed_at" | "lease_until" | "attempt" | "status" | "max_minutes" | "goal_id">[];
+  reviewQueue: Pick<TaskRow, "id" | "key" | "title" | "submitted_at" | "attempt" | "goal_id">[];
+  recentAccepted: Pick<TaskRow, "id" | "key" | "title" | "finished_at" | "cost_usd" | "attempt" | "goal_id">[];
+  blocked: Pick<TaskRow, "id" | "key" | "title" | "last_error" | "attempt" | "goal_id">[];
+  /** tasks accepted since 00:00 UTC (one index-bounded count) */
+  acceptedToday: number;
   spend: SpendSummary;
   needsHuman: { ts: number; text: string }[];
   events: EventRow[];

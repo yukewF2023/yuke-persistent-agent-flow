@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { BoardStatus, DeliverableRow, Env, EventRow, GoalRow, LiveStatus, ProgressRow, ProgressSnapshot, ReviewRow, Role, SpendSummary, TaskRow, TaskStatus, WorkerRow } from "./types";
-import { json, readJson, secondsToUtcMidnight } from "./util";
+import { json, readJson, secondsToUtcMidnight, utcDayStart } from "./util";
 
 /** OpenCode Go usage windows in USD (the workers' model provider). */
 const GO_CAPS = { fiveHour: 12, week: 30, month: 60 };
@@ -156,6 +156,9 @@ export class Board extends DurableObject<Env> {
     try {
       this.ctx.storage.sql.exec("ALTER TABLE deliverables ADD COLUMN session_url TEXT");
     } catch {}
+    try {
+      this.ctx.storage.sql.exec("ALTER TABLE goals ADD COLUMN catalog_size INTEGER");
+    } catch {}
   }
 
   // ---- entry ----
@@ -206,10 +209,11 @@ export class Board extends DurableObject<Env> {
     }
     const workers = this.q<WorkerRow & { task_key: string | null }>("SELECT w.*, t.key AS task_key FROM workers w LEFT JOIN tasks t ON t.id = w.task_id ORDER BY w.id");
     const ready = this.q<BoardStatus["ready"][number]>("SELECT id, key, title, goal_id, priority, created_at, deps FROM tasks WHERE status = 'ready' ORDER BY priority, id LIMIT 20");
-    const running = this.q<BoardStatus["running"][number]>("SELECT id, key, title, worker_id, claimed_at, lease_until, attempt, status FROM tasks WHERE status IN ('claimed','running') ORDER BY claimed_at LIMIT 10");
-    const reviewQueue = this.q<BoardStatus["reviewQueue"][number]>("SELECT id, key, title, submitted_at, attempt FROM tasks WHERE status = 'review' ORDER BY submitted_at LIMIT 20");
-    const recentAccepted = this.q<BoardStatus["recentAccepted"][number]>("SELECT id, key, title, finished_at, cost_usd, attempt FROM tasks WHERE status = 'accepted' ORDER BY updated_at DESC LIMIT 12");
-    const blocked = this.q<BoardStatus["blocked"][number]>("SELECT id, key, title, last_error, attempt FROM tasks WHERE status = 'blocked' ORDER BY updated_at DESC LIMIT 10");
+    const running = this.q<BoardStatus["running"][number]>("SELECT id, key, title, worker_id, claimed_at, lease_until, attempt, status, max_minutes, goal_id FROM tasks WHERE status IN ('claimed','running') ORDER BY claimed_at LIMIT 10");
+    const reviewQueue = this.q<BoardStatus["reviewQueue"][number]>("SELECT id, key, title, submitted_at, attempt, goal_id FROM tasks WHERE status = 'review' ORDER BY submitted_at LIMIT 20");
+    const recentAccepted = this.q<BoardStatus["recentAccepted"][number]>("SELECT id, key, title, finished_at, cost_usd, attempt, goal_id FROM tasks WHERE status = 'accepted' ORDER BY updated_at DESC LIMIT 12");
+    const blocked = this.q<BoardStatus["blocked"][number]>("SELECT id, key, title, last_error, attempt, goal_id FROM tasks WHERE status = 'blocked' ORDER BY updated_at DESC LIMIT 10");
+    const acceptedToday = Number(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM tasks WHERE status = 'accepted' AND updated_at >= ?", utcDayStart(now))?.n ?? 0);
     const events = this.q<EventRow>("SELECT * FROM events ORDER BY id DESC LIMIT 60");
     const progress: Record<string, ProgressSnapshot> = {};
     for (const r of running) {
@@ -227,6 +231,7 @@ export class Board extends DurableObject<Env> {
       reviewQueue,
       recentAccepted,
       blocked,
+      acceptedToday,
       spend: this.spendSummary(now),
       needsHuman: this.kvJson<{ ts: number; text: string }[]>("needs_human") ?? [],
       events,
@@ -280,7 +285,7 @@ export class Board extends DurableObject<Env> {
   /** GET /api/live — workers, tasks in progress and their snapshots. Uncached (a few row reads); the Workers view polls it. */
   private live(now: number): Response {
     const workers = this.q<WorkerRow & { task_key: string | null }>("SELECT w.*, t.key AS task_key FROM workers w LEFT JOIN tasks t ON t.id = w.task_id ORDER BY w.id");
-    const running = this.q<LiveStatus["running"][number]>("SELECT id, key, title, worker_id, claimed_at, lease_until, attempt, status FROM tasks WHERE status IN ('claimed','running') ORDER BY claimed_at LIMIT 10");
+    const running = this.q<LiveStatus["running"][number]>("SELECT id, key, title, worker_id, claimed_at, lease_until, attempt, status, max_minutes, goal_id FROM tasks WHERE status IN ('claimed','running') ORDER BY claimed_at LIMIT 10");
     const progress: Record<string, ProgressSnapshot> = {};
     for (const r of running) {
       const snap = this.progressFor(r.id);
@@ -598,12 +603,13 @@ export class Board extends DurableObject<Env> {
         if (!id) continue;
         seen.push(id);
         this.run(
-          "INSERT INTO goals(id, title, body, done_when, min_ready, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title = excluded.title, body = excluded.body, done_when = excluded.done_when, min_ready = excluded.min_ready, status = excluded.status, updated_at = excluded.updated_at",
+          "INSERT INTO goals(id, title, body, done_when, min_ready, catalog_size, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title = excluded.title, body = excluded.body, done_when = excluded.done_when, min_ready = excluded.min_ready, catalog_size = excluded.catalog_size, status = excluded.status, updated_at = excluded.updated_at",
           id,
           str(g.title, 200) || id,
           str(g.body, 60_000),
           str(g.done_when, 2000) || null,
           Math.max(0, Math.min(50, num(g.min_ready, 4))),
+          g.catalog_size === undefined || g.catalog_size === null ? null : Math.max(0, Math.min(10_000, num(g.catalog_size))),
           ["active", "paused", "done"].includes(String(g.status)) ? String(g.status) : "active",
           now,
           now

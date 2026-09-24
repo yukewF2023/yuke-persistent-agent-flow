@@ -1,6 +1,6 @@
 import { Board } from "./board";
 import { getFile, getRawFile, putFile } from "./github";
-import { renderGoalsPage, renderNotFound, renderStatusPage, renderTaskLive, renderTaskPage, renderUnavailable, renderWakeResult, renderWorkersLive } from "./pages";
+import { renderAgents, renderGoalsPage, renderNotFound, renderStatusPage, renderTaskLive, renderTaskPage, renderUnavailable, renderWakeResult } from "./pages";
 import type { BoardStatus, Env, LiveStatus, Role } from "./types";
 import { bearerOk, html, json, timingSafeEqual } from "./util";
 
@@ -143,8 +143,8 @@ export default {
       // HTML fragments the pages poll: the workers list and one task's live section (a few row reads each, uncached)
       if (role === "public" && parts[0] === "live" && parts[1] === "workers") {
         const r = await internal("/api/live");
-        if (r.error) return html(`<li class="muted">live view unavailable: ${r.error}</li>`, 503);
-        return html(renderWorkersLive(r.body as LiveStatus, Date.now(), url.searchParams.get("open") === "1"));
+        if (r.error) return html(`<div class="empty">live view unavailable: ${r.error}</div>`, 503);
+        return html(renderAgents(r.body as LiveStatus, Date.now(), url.searchParams.get("open") === "1"));
       }
       if (role === "public" && parts[0] === "live" && parts[1] === "tasks" && parts[2]) {
         const r = await internal(`/api/tasks/${encodeURIComponent(parts[2])}/progress`);
