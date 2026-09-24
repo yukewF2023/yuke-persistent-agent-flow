@@ -1,7 +1,7 @@
 # Handoff (2026-09-23, rebuild day)
 
 ## State
-- Design: see docs/PLAN.md. Board on the Cloudflare Worker (personal account, free tier), workers on GCP e2-micro `agent-workers` (project `yuke-persistent-agent-flow`, zone us-east1-b), manager = Claude routine `trig_0144Fo1i6xENAvLa58h3BBQ1`.
+- Design: see docs/PLAN.md. Board on the Cloudflare Worker (personal account, free tier), workers on GCP e2-small `agent-workers` (project `yuke-persistent-agent-flow`, zone us-east1-b), manager = Claude routine `trig_0144Fo1i6xENAvLa58h3BBQ1`.
 - Goals: A (TypeScript algorithms library) and B (Python port + cross-checks) in GOALS.md.
 - Secrets: `.dev.vars` holds ORCHESTRATOR_TOKEN and WORKER_TOKEN (pushed to the Worker); `worker/agent-worker.env` (gitignored) holds BOARD_URL, WORKER_TOKEN, OPENCODE_API_KEY for the VM.
 - Health: `scripts/monitor.sh` (anomalies) and `scripts/board.sh status`.
@@ -12,6 +12,6 @@
 - Backups: `/srv/backups/board-<date>.json` on the VM, daily 01:17 UTC, 14 days kept (`sudo board-backup` to run now).
 
 ## Known limits
-- e2-micro has 1 GB RAM and a quarter vCPU: test runs are serialized through `./run-tests` (flock), each worker has MemoryMax=450M, swap is 2 GB. First night: no OOM kills, but ~800 MB of swap in use and 8–25 min per task (a laptop does the same task in 1 min). Task budgets are 45 min for that reason. If tasks start timing out or the journal shows OOM kills, run one worker (`systemctl disable --now agent-worker@2`) or resize to e2-small (~$12/month).
+- VM sizing: e2-micro (1 GB) failed on night one: two opencode sessions plus viewers swapped constantly, sessions stalled, and the shared session store threw SQLite errors. Fixes on 2026-09-24: one opencode data dir per worker (`/srv/agent/xdg-N`), a 12-minute stall watchdog (24 min before the first event), 700M cgroup caps, and a resize to e2-small (2 GB). If sessions stall again, check `free -m` and the journal before anything else.
 - The routine API refuses sub-hourly crons, so the manager is two hourly routines (:13 and :43) sharing the board's lock; see manager/ROUTINE.md.
 - The bundle cap is 800 KB of text per deliverable; bigger work must be split by the manager.

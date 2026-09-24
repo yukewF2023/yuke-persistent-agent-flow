@@ -6,11 +6,11 @@ Two `opencode run` workers (DeepSeek V4.1 Flash via OpenCode Go) that pull tasks
 ```bash
 gcloud config set project yuke-persistent-agent-flow
 gcloud services enable compute.googleapis.com
-gcloud compute instances create agent-workers --zone=us-east1-b --machine-type=e2-micro \
+gcloud compute instances create agent-workers --zone=us-east1-b --machine-type=e2-small \
   --image-family=debian-12 --image-project=debian-cloud --boot-disk-size=30GB --boot-disk-type=pd-standard \
   --network-tier=STANDARD --metadata=enable-oslogin=TRUE --shielded-secure-boot --shielded-vtpm --shielded-integrity-monitoring
 ```
-`us-east1` is a free-tier region; Standard network tier egress has 200 GiB/month free. The external IPv4 (about $3.65/month) is the only recurring VM charge.
+Resized from e2-micro to e2-small on 2026-09-24: 1 GB was not enough for two concurrent opencode sessions (constant swapping, stalled sessions, SQLite errors). e2-small is about $12/month; Standard network tier egress has 200 GiB/month free.
 
 ## Ship and install
 ```bash

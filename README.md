@@ -10,7 +10,7 @@ Think of a small team with one manager and two junior engineers who never sleep.
 
 - **You** write what you want in one file, `GOALS.md`. Today that is Goal A, "build a tested TypeScript algorithms library, one module per item from this catalog", and Goal B, "port each accepted module to Python and prove both agree on random inputs".
 - **The manager is Claude.** Twice an hour it wakes up in a fresh sandbox, reads the goals, and looks at the board. For every piece of work the engineers handed in, it downloads the files and actually runs the tests and type checks. If everything in the acceptance list holds, it accepts; if not, it sends the task back with numbered fixes; after three failed attempts it blocks the task and flags it for you. Then it looks at how many tasks are waiting and, if a goal is running low, writes the next few tasks from the catalog, each with a precise spec and a checklist. It saves a tiny note to itself and goes back to sleep.
-- **The engineers are DeepSeek.** Two worker processes on a $3.65-a-month VM sit in a loop: ask the board for the next task, get a fresh folder with the spec, run an `opencode` session with DeepSeek V4.1 Flash that writes the code and runs the tests, package everything under `out/` plus a short report, hand it in, and ask for the next one. If a session hangs or the VM restarts, the lease expires and the task simply goes back on the board.
+- **The engineers are DeepSeek.** Two worker processes on a small VM sit in a loop: ask the board for the next task, get a fresh folder with the spec, run an `opencode` session with DeepSeek V4.1 Flash that writes the code and runs the tests, package everything under `out/` plus a short report, hand it in, and ask for the next one. If a session hangs or the VM restarts, the lease expires and the task simply goes back on the board.
 - **The board is a Cloudflare Worker.** It is the only shared memory: goals, tasks, who holds what, submitted files, reviews, a log, and spend. Its public page shows all of it live.
 - **Money is the throttle.** Each task's tokens are priced at OpenCode Go rates and the board refuses new claims once the day's spend reaches the pace (default $1.60, about 20 tasks). So "constantly working" means the workers are always either running a task or waiting for budget, never waiting for a human.
 
@@ -52,7 +52,7 @@ GCP e2-micro VM: agent-worker@1, agent-worker@2 ───────┴── B
 | Item | Monthly |
 |---|---|
 | OpenCode Go (the workers' model) | $10, with a $60 usage allowance; the board paces spend at $1.60/day by default (`scripts/board.sh pace`) |
-| GCP e2-micro (free tier) + external IPv4 | about $3.65 |
+| GCP e2-small VM (2 GB) + external IPv4 | about $12 (1 GB e2-micro was too small for two opencode sessions) |
 | Cloudflare Worker + Durable Object | $0 (free tier: 5M row reads and 100k writes a day; the board uses well under 1M reads on a busy day, and the status page shows today's usage) |
 | Claude manager | on the existing Claude plan |
 
