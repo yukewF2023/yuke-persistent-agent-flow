@@ -48,7 +48,7 @@ export default {
       if (role === "public" && parts[0] === "live" && parts[1] === "workers") {
         const r = await internal("/api/live");
         if (r.error) return html(`<li class="muted">live view unavailable: ${r.error}</li>`, 503);
-        return html(renderWorkersLive(r.body as LiveStatus, Date.now()));
+        return html(renderWorkersLive(r.body as LiveStatus, Date.now(), url.searchParams.get("open") === "1"));
       }
       if (role === "public" && parts[0] === "live" && parts[1] === "tasks" && parts[2]) {
         const r = await internal(`/api/tasks/${encodeURIComponent(parts[2])}/progress`);

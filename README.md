@@ -43,9 +43,9 @@ A task moves through these states:
 
 | What | Where |
 |---|---|
-| The board: workers, tasks in progress, review queue, accepted work, blocked tasks, spend, needs-a-human, live log | https://yuke-persistent-agent-flow.yuke-521.workers.dev |
+| The board, in tabs: **Overview** (workers, spend, manager, goals table, needs-a-human), **Board** (ready / in progress / review / accepted / blocked columns), **Workers** (live view), **Goals** (the goal bodies), **Log** (events, filterable by kind), **Spend** (Go windows, last 7 days, Cloudflare free tier) | https://yuke-persistent-agent-flow.yuke-521.workers.dev — the tab is in the URL hash (`/#board`, `/#workers`, `/#log`…), so a bookmark opens straight to it; with JavaScript off the same page shows every section top to bottom |
 | One task: spec, acceptance checklist, every review verdict, the report and the files | click any task on the board (`/tasks/<id>`) |
-| What a worker is doing right now: step, current tool call, tokens and cost so far, the last 30 session events | the Workers card on the board (refreshes every 20 s) and the "Live session" section of the running task's page; JSON at `/api/live` and `/api/tasks/<id>/progress` |
+| What a worker is doing right now: step, current tool call, tokens and cost so far, the last 30 session events | the [Workers tab](https://yuke-persistent-agent-flow.yuke-521.workers.dev/#workers) (refreshes every 20 s) and the "Live session" section of the running task's page; JSON at `/api/live` and `/api/tasks/<id>/progress` |
 | The manager's runs, with full transcripts | https://claude.ai/code/routines/trig_0144Fo1i6xENAvLa58h3BBQ1 (:13) and https://claude.ai/code/routines/trig_019wCc3dqf85HAAtkfDTwUtG (:43) |
 | The workers' full opencode transcripts | opencode web UI on the VM through an SSH tunnel, see [worker/README.md](worker/README.md); or public transcript links on task pages when `OPENCODE_SHARE=auto` |
 | Raw worker logs | `gcloud compute ssh agent-workers --zone=us-east1-b -- 'sudo journalctl -u agent-worker@1 -u agent-worker@2 -f'` |

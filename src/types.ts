@@ -152,6 +152,8 @@ export interface SpendSummary {
   paceUsdPerDay: number;
   inflightEstimateUsd: number;
   pacing: { reason: string; retryAfterS: number } | null;
+  /** the last 7 UTC days, today first */
+  days: { day: string; usd: number; tasks: number }[];
 }
 
 /** Shape of GET /api/live: what the Workers view needs, uncached and cheap (a handful of row reads). */
@@ -168,6 +170,8 @@ export interface BoardStatus {
   goals: (GoalRow & { counts: Record<string, number> })[];
   counts: Record<string, number>;
   workers: (WorkerRow & { task_key: string | null })[];
+  /** the next ready tasks in claim order (priority, id), at most 20 */
+  ready: Pick<TaskRow, "id" | "key" | "title" | "goal_id" | "priority" | "created_at" | "deps">[];
   running: Pick<TaskRow, "id" | "key" | "title" | "worker_id" | "claimed_at" | "lease_until" | "attempt" | "status">[];
   reviewQueue: Pick<TaskRow, "id" | "key" | "title" | "submitted_at" | "attempt">[];
   recentAccepted: Pick<TaskRow, "id" | "key" | "title" | "finished_at" | "cost_usd" | "attempt">[];

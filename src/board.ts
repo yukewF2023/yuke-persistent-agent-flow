@@ -192,11 +192,12 @@ export class Board extends DurableObject<Env> {
       (perGoal[r.goal_id] ??= {})[r.status] = r.n;
     }
     const workers = this.q<WorkerRow & { task_key: string | null }>("SELECT w.*, t.key AS task_key FROM workers w LEFT JOIN tasks t ON t.id = w.task_id ORDER BY w.id");
+    const ready = this.q<BoardStatus["ready"][number]>("SELECT id, key, title, goal_id, priority, created_at, deps FROM tasks WHERE status = 'ready' ORDER BY priority, id LIMIT 20");
     const running = this.q<BoardStatus["running"][number]>("SELECT id, key, title, worker_id, claimed_at, lease_until, attempt, status FROM tasks WHERE status IN ('claimed','running') ORDER BY claimed_at LIMIT 10");
     const reviewQueue = this.q<BoardStatus["reviewQueue"][number]>("SELECT id, key, title, submitted_at, attempt FROM tasks WHERE status = 'review' ORDER BY submitted_at LIMIT 20");
     const recentAccepted = this.q<BoardStatus["recentAccepted"][number]>("SELECT id, key, title, finished_at, cost_usd, attempt FROM tasks WHERE status = 'accepted' ORDER BY updated_at DESC LIMIT 12");
     const blocked = this.q<BoardStatus["blocked"][number]>("SELECT id, key, title, last_error, attempt FROM tasks WHERE status = 'blocked' ORDER BY updated_at DESC LIMIT 10");
-    const events = this.q<EventRow>("SELECT * FROM events ORDER BY id DESC LIMIT 30");
+    const events = this.q<EventRow>("SELECT * FROM events ORDER BY id DESC LIMIT 60");
     const progress: Record<string, ProgressSnapshot> = {};
     for (const r of running) {
       const snap = this.progressFor(r.id);
@@ -208,6 +209,7 @@ export class Board extends DurableObject<Env> {
       goals: goals.map((g) => ({ ...g, counts: perGoal[g.id] ?? {} })),
       counts,
       workers,
+      ready,
       running,
       reviewQueue,
       recentAccepted,
@@ -282,7 +284,13 @@ export class Board extends DurableObject<Env> {
     const todayUsd = today.usd;
     const todayTasks = today.tasks;
     let weekUsd = 0;
-    for (let d = 0; d < 7; d++) weekUsd += dayTotals(now - d * 86_400_000).usd;
+    const days: SpendSummary["days"] = [];
+    for (let d = 0; d < 7; d++) {
+      const ts = now - d * 86_400_000;
+      const t = dayTotals(ts);
+      weekUsd += t.usd;
+      days.push({ day: this.today(ts), usd: t.usd, tasks: t.tasks });
+    }
     const monthUsd = (this.kvJson<{ usd: number }>(`spend:month:${this.today(now).slice(0, 7)}`) ?? { usd: 0 }).usd;
     const fiveHourUsd = Number(this.one<{ s: number }>("SELECT COALESCE(SUM(usd), 0) AS s FROM spend WHERE ts >= ?", now - 5 * 3600_000)?.s ?? 0);
     const pace = Number(this.kvGet("pace_usd_per_day") ?? DEFAULT_PACE_USD_PER_DAY);
@@ -294,7 +302,7 @@ export class Board extends DurableObject<Env> {
     else if (weekUsd >= 0.9 * GO_CAPS.week) pacing = { reason: `Go weekly window at 90% ($${weekUsd.toFixed(2)} of $${GO_CAPS.week})`, retryAfterS: 3600 };
     else if (monthUsd >= 0.9 * GO_CAPS.month) pacing = { reason: `Go monthly window at 90% ($${monthUsd.toFixed(2)} of $${GO_CAPS.month})`, retryAfterS: 3600 };
     else if (todayUsd + inflightEstimateUsd >= pace) pacing = { reason: `daily pace $${pace.toFixed(2)} reached ($${todayUsd.toFixed(2)} spent + $${inflightEstimateUsd.toFixed(2)} in flight); resumes 00:00 UTC`, retryAfterS: Math.min(900, secondsToUtcMidnight(now)) };
-    return { todayUsd, fiveHourUsd, weekUsd, monthUsd, todayTasks, paceUsdPerDay: pace, inflightEstimateUsd, pacing };
+    return { todayUsd, fiveHourUsd, weekUsd, monthUsd, todayTasks, paceUsdPerDay: pace, inflightEstimateUsd, pacing, days };
   }
 
   /** Return expired claimed/running tasks to `ready` (lazy; called from claim and status). */
