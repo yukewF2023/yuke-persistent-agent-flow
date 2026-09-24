@@ -1,6 +1,6 @@
 # Goals
 
-Owned by Yuke. The manager syncs this file into the board on every run (`scripts/board.sh goals-sync`), so editing it and pushing to `main` is all it takes: the next run (within 30 minutes) picks up new goals, new catalog items and changed rules, and reconciles the board.
+Owned by Yuke. The manager syncs this file into the board on every run (`scripts/board.sh goals-sync`), so editing it is all it takes: use the editor at https://yuke-persistent-agent-flow.yuke-521.workers.dev/goals (one commit on `main` per save) or push with git. Every push to `main` fires the manager within about a minute (otherwise it runs at :13 and :43); the run picks up new goals, new catalog items and changed rules, and reconciles the board.
 Format: one `## Goal <id>: <title>` section per goal. The lines `- status:` (`active`, `paused` or `done`; only active goals hand out tasks), `- min_ready:` (how many ready tasks the manager keeps queued) and `- done-when:` are parsed; everything else in the section is the goal body the manager plans from, so it should say what a task looks like and how the reviewer can check it. Removing a section pauses that goal.
 
 ## Goal A: TypeScript algorithms and data structures library
