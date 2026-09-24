@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import type { BoardStatus, DeliverableRow, Env, EventRow, GoalRow, ReviewRow, Role, SpendSummary, TaskRow, TaskStatus, WorkerRow } from "./types";
+import type { BoardStatus, DeliverableRow, Env, EventRow, GoalRow, LiveStatus, ProgressRow, ProgressSnapshot, ReviewRow, Role, SpendSummary, TaskRow, TaskStatus, WorkerRow } from "./types";
 import { json, readJson, secondsToUtcMidnight } from "./util";
 
 /** OpenCode Go usage windows in USD (the workers' model provider). */
@@ -15,6 +15,10 @@ const CF_ROWS_READ_LIMIT = 5_000_000;
 const CF_ROWS_WRITTEN_LIMIT = 100_000;
 const CF_READ_SOFT_LIMIT = 4_500_000;
 const METER_FLUSH_MS = 60_000;
+/** Live progress snapshots: one small row per task, overwritten on every post (a worker posts at most every 20 s). */
+const PROGRESS_MAX_EVENTS = 30;
+const PROGRESS_MAX_BYTES = 12_000;
+const PROGRESS_KEEP_MS = 3 * 86_400_000;
 const TERMINAL: TaskStatus[] = ["accepted", "rejected", "cancelled"];
 
 const num = (v: unknown, d = 0) => (typeof v === "number" && Number.isFinite(v) ? v : Number(v) || d);
@@ -132,6 +136,8 @@ export class Board extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS spend (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, task_id INTEGER, attempt INTEGER, usd REAL NOT NULL, tokens INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS spend_ts ON spend(ts);
       CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS progress (task_id INTEGER PRIMARY KEY, attempt INTEGER NOT NULL, worker_id TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, body TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS progress_updated ON progress(updated_at);
     `);
     // additive migrations (SQLite has no ADD COLUMN IF NOT EXISTS)
     try {
@@ -148,7 +154,9 @@ export class Board extends DurableObject<Env> {
     try {
       // public
       if (m === "GET" && p[0] === "api" && p[1] === "status") return this.status();
+      if (m === "GET" && p[0] === "api" && p[1] === "live") return this.live(Date.now());
       if (m === "GET" && p[0] === "api" && p[1] === "tasks" && !p[2]) return json(this.listTasks(url));
+      if (m === "GET" && p[0] === "api" && p[1] === "tasks" && p[2] && p[3] === "progress") return this.progressDetail(Number(p[2]));
       if (m === "GET" && p[0] === "api" && p[1] === "tasks" && p[2]) return this.taskDetail(Number(p[2]));
 
       if (p[0] === "manager") {
@@ -189,6 +197,11 @@ export class Board extends DurableObject<Env> {
     const recentAccepted = this.q<BoardStatus["recentAccepted"][number]>("SELECT id, key, title, finished_at, cost_usd, attempt FROM tasks WHERE status = 'accepted' ORDER BY updated_at DESC LIMIT 12");
     const blocked = this.q<BoardStatus["blocked"][number]>("SELECT id, key, title, last_error, attempt FROM tasks WHERE status = 'blocked' ORDER BY updated_at DESC LIMIT 10");
     const events = this.q<EventRow>("SELECT * FROM events ORDER BY id DESC LIMIT 30");
+    const progress: Record<string, ProgressSnapshot> = {};
+    for (const r of running) {
+      const snap = this.progressFor(r.id);
+      if (snap) progress[String(r.id)] = snap;
+    }
     const lock = Number(this.kvGet("manager:lock_until") ?? 0);
     const body: BoardStatus = {
       generatedAt: now,
@@ -202,6 +215,7 @@ export class Board extends DurableObject<Env> {
       spend: this.spendSummary(now),
       needsHuman: this.kvJson<{ ts: number; text: string }[]>("needs_human") ?? [],
       events,
+      progress,
       manager: { lastRunAt: this.kvGet("manager:last_run_at") ? Number(this.kvGet("manager:last_run_at")) : null, lockedUntil: lock > now ? lock : null },
       cloudflare: { ...this.meterToday(now), readLimit: CF_ROWS_READ_LIMIT, writeLimit: CF_ROWS_WRITTEN_LIMIT }
     };
@@ -227,7 +241,38 @@ export class Board extends DurableObject<Env> {
     const reviews = this.q<ReviewRow>("SELECT * FROM reviews WHERE task_id = ? ORDER BY id DESC LIMIT 20", id);
     const d = this.one<DeliverableRow>("SELECT * FROM deliverables WHERE task_id = ? ORDER BY attempt DESC LIMIT 1", id);
     const deliverable = d ? { ...d, files: JSON.parse(d.files) as Record<string, string> } : null;
-    return json({ task: { ...task, deps: JSON.parse(task.deps) as number[] }, reviews, deliverable });
+    return json({ task: { ...task, deps: JSON.parse(task.deps) as number[] }, reviews, deliverable, progress: this.progressFor(id) });
+  }
+
+  /** The last progress snapshot a worker posted for this task (one primary-key read), or null. */
+  private progressFor(taskId: number): ProgressSnapshot | null {
+    const r = this.one<ProgressRow>("SELECT * FROM progress WHERE task_id = ?", taskId);
+    if (!r) return null;
+    try {
+      return { ...(JSON.parse(r.body) as Omit<ProgressSnapshot, "updated_at">), updated_at: r.updated_at };
+    } catch {
+      return null;
+    }
+  }
+
+  /** GET /api/tasks/:id/progress — the task's state plus its live snapshot; what the task page polls while the task runs. */
+  private progressDetail(id: number): Response {
+    const task = this.one<Pick<TaskRow, "id" | "key" | "status" | "worker_id" | "attempt" | "claimed_at" | "lease_until">>("SELECT id, key, status, worker_id, attempt, claimed_at, lease_until FROM tasks WHERE id = ?", id);
+    if (!task) return json({ error: "not found" }, 404);
+    return json({ generatedAt: Date.now(), task, progress: this.progressFor(id) });
+  }
+
+  /** GET /api/live — workers, tasks in progress and their snapshots. Uncached (a few row reads); the Workers view polls it. */
+  private live(now: number): Response {
+    const workers = this.q<WorkerRow & { task_key: string | null }>("SELECT w.*, t.key AS task_key FROM workers w LEFT JOIN tasks t ON t.id = w.task_id ORDER BY w.id");
+    const running = this.q<LiveStatus["running"][number]>("SELECT id, key, title, worker_id, claimed_at, lease_until, attempt, status FROM tasks WHERE status IN ('claimed','running') ORDER BY claimed_at LIMIT 10");
+    const progress: Record<string, ProgressSnapshot> = {};
+    for (const r of running) {
+      const snap = this.progressFor(r.id);
+      if (snap) progress[String(r.id)] = snap;
+    }
+    const body: LiveStatus = { generatedAt: now, workers, running, progress };
+    return json(body);
   }
 
   // ---- spend / pace ----
@@ -313,6 +358,7 @@ export class Board extends DurableObject<Env> {
         this.touch();
         return json({ ok: true, lease_until: now + leaseMs(task) });
       }
+      if (m === "POST" && p[2] === "progress") return this.progress(task, workerId, body, now);
       if (m === "POST" && p[2] === "submit") return this.submit(task, workerId, body, now);
       if (m === "POST" && p[2] === "fail") return this.fail(task, workerId, body, now);
       if (m === "POST" && p[2] === "release") {
@@ -404,6 +450,57 @@ export class Board extends DurableObject<Env> {
       return json({ ok: true, lease_until: until });
     }
     return json({ ok: true });
+  }
+
+  /**
+   * POST /worker/tasks/:id/progress — the worker's live snapshot of the running session (step, tool, tokens, cost, last ~30 events).
+   * One row per task, overwritten; no event, no status-cache invalidation (the page's live view polls /api/live instead).
+   */
+  private progress(task: TaskRow, workerId: string, body: Record<string, unknown>, now: number): Response {
+    const kinds = ["step", "tool", "text", "error"];
+    const events = (Array.isArray(body.events) ? (body.events as unknown[]).slice(-PROGRESS_MAX_EVENTS) : []).map((e) => {
+      const o = (e && typeof e === "object" ? e : {}) as Record<string, unknown>;
+      const out: Record<string, unknown> = { t: Math.max(0, Math.round(num(o.t))), k: kinds.includes(String(o.k)) ? String(o.k) : "text", n: Math.max(0, Math.round(num(o.n))) };
+      if (typeof o.tool === "string") out.tool = o.tool.slice(0, 40);
+      if (typeof o.title === "string") out.title = o.title.slice(0, 120);
+      if (typeof o.status === "string") out.status = o.status.slice(0, 20);
+      if (typeof o.text === "string") out.text = o.text.slice(0, 200);
+      return out;
+    });
+    const phase = ["running", "done", "failed"].includes(String(body.phase)) ? String(body.phase) : "running";
+    const count = (v: unknown) => Math.max(0, Math.round(num(v)));
+    const snap = {
+      worker_id: workerId,
+      attempt: task.attempt,
+      phase,
+      step: count(body.step),
+      tools: count(body.tools),
+      elapsed_s: count(body.elapsed_s),
+      tokens_in: count(body.tokens_in),
+      tokens_out: count(body.tokens_out),
+      tokens_cached: count(body.tokens_cached),
+      cost_usd: Math.max(0, num(body.cost_usd)),
+      last_tool: str(body.last_tool, 40) || null,
+      last_text: str(body.last_text, 200) || null,
+      session_id: str(body.session_id, 80) || null,
+      session_url: /^https:\/\//.test(str(body.session_url, 300)) ? str(body.session_url, 300) : null,
+      events
+    };
+    let text = JSON.stringify(snap);
+    while (text.length > PROGRESS_MAX_BYTES && snap.events.length) {
+      snap.events.shift();
+      text = JSON.stringify(snap);
+    }
+    this.run(
+      "INSERT INTO progress(task_id, attempt, worker_id, done, updated_at, body) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(task_id) DO UPDATE SET attempt = excluded.attempt, worker_id = excluded.worker_id, done = excluded.done, updated_at = excluded.updated_at, body = excluded.body",
+      task.id,
+      task.attempt,
+      workerId,
+      phase === "running" ? 0 : 1,
+      now,
+      text
+    );
+    return json({ ok: true, bytes: text.length });
   }
 
   private submit(task: TaskRow, workerId: string, body: Record<string, unknown>, now: number): Response {
@@ -590,8 +687,9 @@ export class Board extends DurableObject<Env> {
         "DELETE FROM deliverables WHERE created_at < ? AND id NOT IN (SELECT d.id FROM deliverables d JOIN tasks t ON t.id = d.task_id WHERE t.status = 'accepted' AND d.attempt = t.attempt)",
         now - 14 * 86_400_000
       );
+      const progress = this.run("DELETE FROM progress WHERE updated_at < ?", now - PROGRESS_KEEP_MS);
       this.touch();
-      return json({ ok: true, deleted: { events, spend, deliverables } });
+      return json({ ok: true, deleted: { events, spend, deliverables, progress } });
     }
     return json({ error: "not found" }, 404);
   }

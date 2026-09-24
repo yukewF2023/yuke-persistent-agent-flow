@@ -8,7 +8,7 @@ import { hostname } from "node:os";
 import { join, relative } from "node:path";
 import { createInterface } from "node:readline";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 const env = process.env;
 const BOARD_URL = (env.BOARD_URL ?? "").replace(/\/$/, "");
 const TOKEN = env.WORKER_TOKEN ?? "";
@@ -21,6 +21,10 @@ const POLL_S = Number(env.POLL_S ?? 60);
 const SESSION_API = env.OPENCODE_SERVER_URL ?? "http://127.0.0.1:4091"; // this worker's opencode-web@ instance; used only to read a session's share link
 const STALL_MINUTES = Number(env.STALL_MINUTES ?? 12); // no opencode event for this long → kill and fail fast (the 45-min budget is for real work)
 const HEARTBEAT_S = Number(env.HEARTBEAT_S ?? 120);
+// live progress for the board's Workers view: one small snapshot per task, overwritten on the board; at most one post every PROGRESS_MIN_S
+const PROGRESS_MIN_S = Number(env.PROGRESS_MIN_S ?? 20);
+const PROGRESS_MAX_S = Number(env.PROGRESS_MAX_S ?? 30);
+const PROGRESS_EVENTS = 30;
 const FILES_MAX_BYTES = 800_000;
 const FILES_MAX_COUNT = 200;
 const FILE_MAX_BYTES = 200_000;
@@ -34,10 +38,11 @@ const log = (...a) => console.log(new Date().toISOString(), `[${WORKER_ID}]`, ..
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---- board API ----
-async function api(method, path, body) {
-  for (let attempt = 1; attempt <= 3; attempt++) {
+async function api(method, path, body, opts = {}) {
+  const retries = opts.retries ?? 3;
+  for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const res = await fetch(BOARD_URL + path, { method, headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(30_000) });
+      const res = await fetch(BOARD_URL + path, { method, headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000) });
       const text = await res.text();
       let json = null;
       try {
@@ -45,12 +50,13 @@ async function api(method, path, body) {
       } catch {}
       return { ok: res.ok, status: res.status, json, text };
     } catch (err) {
-      log(`api ${method} ${path} failed (${attempt}/3): ${err.message}`);
-      if (attempt === 3) return { ok: false, status: 0, json: null, text: String(err.message) };
+      log(`api ${method} ${path} failed (${attempt}/${retries}): ${err.message}`);
+      if (attempt === retries) return { ok: false, status: 0, json: null, text: String(err.message) };
       await sleep(5_000 * attempt);
     }
   }
 }
+const oneLine = (s, max = 160) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 
 // ---- pricing (DeepSeek V4.1 Flash on OpenCode Go; peak x2 weekdays 01–04 and 06–10 UTC) ----
 const PRICE = { input: 0.21, output: 0.84, cacheRead: 0.021 };
@@ -249,6 +255,45 @@ async function runTask(claim) {
   let leaseLost = false;
   let stalled = false;
   let lastEventAt = Date.now();
+  let lastText = null;
+
+  // ---- live progress: the last PROGRESS_EVENTS events plus running totals, posted to the board where one row per task is overwritten ----
+  const feed = [];
+  let progressDirty = false;
+  let progressStepDone = false;
+  let progressLastPost = 0;
+  let progressPromise = null;
+  let shareUrl = null;
+  let shareChecks = 0;
+  const elapsedS = () => Math.round((Date.now() - started) / 1000);
+  const shortTitle = (t) => String(t).split(ws + "/").join("").split(ws.replace(/^\//, "") + "/").join(""); // file paths relative to the workspace
+  const pushFeed = (e) => {
+    feed.push(e);
+    if (feed.length > PROGRESS_EVENTS) feed.shift();
+    progressDirty = true;
+  };
+  const snapshot = (phase) => ({ worker_id: WORKER_ID, attempt: task.attempt, phase, step: steps, tools, elapsed_s: elapsedS(), tokens_in: tokens.input, tokens_out: tokens.output + tokens.reasoning, tokens_cached: tokens.cacheRead, cost_usd: Number(cost.toFixed(6)), last_tool: lastTool || null, last_text: lastText, session_id: sessionID, session_url: shareUrl, events: feed });
+  const postProgress = (phase = "running", force = false) => {
+    if (progressPromise) return force ? progressPromise.then(() => postProgress(phase, true)) : progressPromise;
+    progressDirty = false;
+    progressStepDone = false;
+    progressLastPost = Date.now();
+    progressPromise = (async () => {
+      if (sessionID && !shareUrl && shareChecks < 3) {
+        shareChecks++;
+        shareUrl = await sessionShareUrl(sessionID);
+      }
+      const r = await api("POST", `/worker/tasks/${task.id}/progress`, snapshot(phase), { retries: 1, timeoutMs: 10_000 });
+      if (!r.ok && r.status !== 409) log(`progress post failed (${r.status}): ${(r.text ?? "").slice(0, 120)}`);
+    })().finally(() => {
+      progressPromise = null;
+    });
+    return progressPromise;
+  };
+  const progressTimer = setInterval(() => {
+    const since = (Date.now() - progressLastPost) / 1000;
+    if ((progressStepDone && since >= PROGRESS_MIN_S) || (progressDirty && since >= PROGRESS_MAX_S)) void postProgress();
+  }, 5_000);
 
   const prompt = "Read TASK.md in this directory and do exactly what it says. Work until the acceptance criteria are met, then make sure out/REPORT.md exists.";
   const args = ["run", "--auto", "--format", "json", "--model", MODEL, "--dir", ws, "--title", `task-${task.id}-${safeName(task.key)}`, prompt];
@@ -304,12 +349,20 @@ async function runTask(claim) {
       tokens.cacheWrite += step.cacheWrite;
       cost += stepCost(step, ev.timestamp ?? Date.now());
       opencodeCost += Number(part.cost ?? 0);
+      pushFeed({ t: elapsedS(), k: "step", n: steps });
+      progressStepDone = true;
+      if ((Date.now() - progressLastPost) / 1000 >= PROGRESS_MIN_S) void postProgress();
     } else if (ev.type === "tool_use") {
       tools++;
       lastTool = String(part.tool ?? "tool");
       if (part.state?.status === "error") lastError = String(part.state.error ?? "tool error").slice(0, 300);
+      pushFeed({ t: elapsedS(), k: "tool", n: steps, tool: lastTool.slice(0, 40), title: oneLine(shortTitle(part.state?.title ?? ""), 120), status: String(part.state?.status ?? "") });
+    } else if (ev.type === "text") {
+      lastText = oneLine(part.text);
+      if (lastText) pushFeed({ t: elapsedS(), k: "text", n: steps, text: lastText });
     } else if (ev.type === "error") {
       lastError = JSON.stringify(ev.error ?? ev).slice(0, 300);
+      pushFeed({ t: elapsedS(), k: "error", n: steps, text: oneLine(lastError, 200) });
     }
   });
   child.stderr.on("data", (d) => {
@@ -319,6 +372,7 @@ async function runTask(claim) {
   clearInterval(hb);
   clearTimeout(timer);
   clearInterval(stallTimer);
+  clearInterval(progressTimer);
   current = null;
   if (stopping) {
     // shutdown() already released the task (attempt not consumed); do not also report a failure
@@ -359,6 +413,7 @@ async function runTask(claim) {
 
   const fail = async (error) => {
     log(`failing #${task.id}: ${error}`);
+    await postProgress("failed", true);
     await api("POST", `/worker/tasks/${task.id}/fail`, { worker_id: WORKER_ID, attempt: task.attempt, error: `${error}${stderrTail ? ` | stderr: ${stderrTail.slice(-300)}` : ""}`.slice(0, 500), ...usage });
     const keep = join(WORK_ROOT, "last-failed");
     rmSync(keep, { recursive: true, force: true });
@@ -370,6 +425,7 @@ async function runTask(claim) {
   if (timedOut && collected.count === 0) return fail(`timed out after ${task.max_minutes} min with no files under out/ (${steps} steps)`);
   if (collected.count === 0) return fail(`opencode exited ${exitCode} without writing any file under out/${lastError ? `: ${lastError}` : ""}`);
   if (timedOut || stalled) report += `\nNOTE: ${stalled ? "the session stalled and was stopped" : "the time budget ran out"}; this may be incomplete.`;
+  await postProgress("done", true);
   const sub = await api("POST", `/worker/tasks/${task.id}/submit`, { worker_id: WORKER_ID, attempt: task.attempt, report: report.slice(0, 60_000), files: collected.files, truncated: collected.truncated, ...usage });
   if (!sub.ok) {
     log(`submit failed (${sub.status}): ${sub.text.slice(0, 200)}`);

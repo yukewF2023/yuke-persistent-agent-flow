@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end smoke test of the board API (48 checks). Usage, from the repo root with `npm run dev` running: scripts/smoke.sh http://localhost:8787
+# End-to-end smoke test of the board API (56 checks). Usage, from the repo root with `npm run dev` running: scripts/smoke.sh http://localhost:8787
 # Reads ORCHESTRATOR_TOKEN / WORKER_TOKEN from .dev.vars. Safe to re-run (unique task keys per run); wipe .wrangler/state between runs for a clean board.
 # Written for bash 3.2: every response is captured with R=$(...) first (no nested quotes inside "$(...)").
 set -u
@@ -36,6 +36,18 @@ echo "{\"worker_id\":\"w1\",\"task_id\":$ID1,\"note\":\"step 3\"}" > $T/hb.json
 R=$(curl -s "${W[@]}" -X POST "$U/worker/heartbeat" -d @$T/hb.json); check "heartbeat extends" '"lease_until"' "$R"
 echo "{\"worker_id\":\"w2\",\"task_id\":$ID1}" > $T/hb2.json
 R=$(code "${W[@]}" -X POST "$U/worker/heartbeat" -d @$T/hb2.json); check "heartbeat wrong holder 409" "409" "$R"
+cat > $T/prog.json <<'J'
+{"worker_id":"w1","attempt":1,"phase":"running","step":3,"tools":4,"elapsed_s":75,"tokens_in":5000,"tokens_out":300,"tokens_cached":4000,"cost_usd":0.0012,"last_tool":"bash","last_text":"Running the tests now","session_id":"ses_x","events":[{"t":10,"k":"tool","n":1,"tool":"read","title":"TASK.md","status":"completed"},{"t":40,"k":"text","n":2,"text":"I will implement it"},{"t":70,"k":"tool","n":3,"tool":"bash","title":"npx vitest run","status":"completed"},{"t":75,"k":"step","n":3}]}
+J
+R=$(curl -s "${W[@]}" -X POST "$U/worker/tasks/$ID1/progress" -d @$T/prog.json); check "progress post by holder" '"ok": true' "$R"
+echo '{"worker_id":"w2","attempt":1,"step":1}' > $T/prog2.json
+R=$(code "${W[@]}" -X POST "$U/worker/tasks/$ID1/progress" -d @$T/prog2.json); check "progress post wrong holder 409" "409" "$R"
+R=$(curl -s "$U/api/tasks/$ID1/progress"); check "progress read" '"last_tool": "bash"' "$R"
+R=$(curl -s "$U/api/live"); check "live has snapshot" '"npx vitest run"' "$R"
+R=$(curl -s "$U/live/workers"); check "live workers fragment" 'bash: npx vitest run' "$R"
+R=$(curl -s "$U/live/tasks/$ID1"); check "live task fragment" 'data-status="running"' "$R"
+R=$(curl -s "$U/tasks/$ID1"); check "task page live section" 'Live session' "$R"
+R=$(curl -s "$U/"); check "status page live line" 'npx vitest run' "$R"
 cat > $T/sub1.json <<'J'
 {"worker_id":"w1","attempt":1,"report":"did one","files":{"out/REPORT.md":"# done","out/src/a.ts":"export const a = 1;"},"steps":7,"tokens_in":120000,"tokens_out":4000,"tokens_cached":90000,"cost_usd":0.11,"session_id":"ses_x"}
 J

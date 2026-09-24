@@ -48,6 +48,15 @@ export const when = (ts: number | null | undefined) => (ts ? new Date(ts).toISOS
 
 export const usd = (n: number | null | undefined, digits = 2) => `$${Number(n ?? 0).toFixed(digits)}`;
 
+/** Seconds as "45s", "3m20s" or "1h05m". */
+export const dur = (seconds: number | null | undefined) => {
+  const s = Math.max(0, Math.round(Number(seconds ?? 0)));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  return h ? `${h}h${String(m).padStart(2, "0")}m` : m ? `${m}m${String(r).padStart(2, "0")}s` : `${r}s`;
+};
+
 /** Start of the current UTC day / month as epoch ms. */
 export function utcDayStart(now = Date.now()): number {
   const d = new Date(now);

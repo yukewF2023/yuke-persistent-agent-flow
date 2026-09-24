@@ -70,6 +70,49 @@ export interface DeliverableRow {
   created_at: number;
 }
 
+/** One entry of a worker's live progress feed (the last ~30 opencode events of the running task). */
+export interface ProgressEvent {
+  /** seconds since the session started */
+  t: number;
+  k: "step" | "tool" | "text" | "error";
+  /** step number at the time of the event */
+  n: number;
+  tool?: string;
+  title?: string;
+  status?: string;
+  text?: string;
+}
+
+/** Live progress snapshot a worker posts for its running task (overwritten, never appended). */
+export interface ProgressSnapshot {
+  worker_id: string;
+  attempt: number;
+  phase: "running" | "done" | "failed";
+  step: number;
+  tools: number;
+  elapsed_s: number;
+  tokens_in: number;
+  tokens_out: number;
+  tokens_cached: number;
+  cost_usd: number;
+  last_tool: string | null;
+  last_text: string | null;
+  session_id: string | null;
+  session_url: string | null;
+  events: ProgressEvent[];
+  /** set by the board */
+  updated_at: number;
+}
+
+export interface ProgressRow {
+  task_id: number;
+  attempt: number;
+  worker_id: string;
+  done: number;
+  updated_at: number;
+  body: string; // JSON ProgressSnapshot without updated_at
+}
+
 export interface ReviewRow {
   id: number;
   task_id: number;
@@ -111,6 +154,14 @@ export interface SpendSummary {
   pacing: { reason: string; retryAfterS: number } | null;
 }
 
+/** Shape of GET /api/live: what the Workers view needs, uncached and cheap (a handful of row reads). */
+export interface LiveStatus {
+  generatedAt: number;
+  workers: (WorkerRow & { task_key: string | null })[];
+  running: Pick<TaskRow, "id" | "key" | "title" | "worker_id" | "claimed_at" | "lease_until" | "attempt" | "status">[];
+  progress: Record<string, ProgressSnapshot>;
+}
+
 /** Shape of GET /api/status (also what the status page renders). */
 export interface BoardStatus {
   generatedAt: number;
@@ -124,6 +175,8 @@ export interface BoardStatus {
   spend: SpendSummary;
   needsHuman: { ts: number; text: string }[];
   events: EventRow[];
+  /** live snapshots of the tasks in progress, keyed by task id (as posted by the workers; at most one per running task) */
+  progress: Record<string, ProgressSnapshot>;
   manager: { lastRunAt: number | null; lockedUntil: number | null };
   /** Durable Object row usage today against the free-tier limits. */
   cloudflare: { day: string; reads: number; writes: number; readLimit: number; writeLimit: number };

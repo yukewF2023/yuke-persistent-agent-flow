@@ -45,8 +45,9 @@ A task moves through these states:
 |---|---|
 | The board: workers, tasks in progress, review queue, accepted work, blocked tasks, spend, needs-a-human, live log | https://yuke-persistent-agent-flow.yuke-521.workers.dev |
 | One task: spec, acceptance checklist, every review verdict, the report and the files | click any task on the board (`/tasks/<id>`) |
+| What a worker is doing right now: step, current tool call, tokens and cost so far, the last 30 session events | the Workers card on the board (refreshes every 20 s) and the "Live session" section of the running task's page; JSON at `/api/live` and `/api/tasks/<id>/progress` |
 | The manager's runs, with full transcripts | https://claude.ai/code/routines/trig_0144Fo1i6xENAvLa58h3BBQ1 (:13) and https://claude.ai/code/routines/trig_019wCc3dqf85HAAtkfDTwUtG (:43) |
-| The workers' opencode sessions, with tool calls, tokens and cost | opencode web UI on the VM through an SSH tunnel, see [worker/README.md](worker/README.md); or public transcript links on task pages when `OPENCODE_SHARE=auto` |
+| The workers' full opencode transcripts | opencode web UI on the VM through an SSH tunnel, see [worker/README.md](worker/README.md); or public transcript links on task pages when `OPENCODE_SHARE=auto` |
 | Raw worker logs | `gcloud compute ssh agent-workers --zone=us-east1-b -- 'sudo journalctl -u agent-worker@1 -u agent-worker@2 -f'` |
 | Machine-readable status | https://yuke-persistent-agent-flow.yuke-521.workers.dev/api/status |
 | Health snapshot with anomalies | `scripts/monitor.sh` |
@@ -66,7 +67,7 @@ GCP e2-micro VM: agent-worker@1, agent-worker@2 ───────┴── B
 1. **Goals** live in [GOALS.md](GOALS.md). A human edits that file and nothing else.
 2. **The manager** ([manager/PROMPT.md](manager/PROMPT.md)) is a Claude Code cloud routine. Every 30 minutes it syncs the goals, **reviews** each finished task by running its tests in its own sandbox (accept, send back with concrete fixes, or split), and **plans** new tasks from the goal catalog so the board never runs dry. It writes a small JSON memory to the board and never keeps a transcript.
 3. **The workers** ([worker/](worker/)) are two systemd services on one small VM. Each claims the next ready task (dependencies accepted, spend within pace), builds a workspace from a template, writes `TASK.md`, runs `opencode run --auto --format json` with DeepSeek V4.1 Flash, bundles everything under `out/` plus `out/REPORT.md`, and submits it for review. Leases, heartbeats and attempts make crashes harmless.
-4. **The board** ([src/board.ts](src/board.ts)) is one Durable Object: goals, tasks, deliverables, reviews, events, workers, spend. The public page shows what each worker is doing, the review queue, accepted work, blocked tasks, spend against pace, and what needs a human.
+4. **The board** ([src/board.ts](src/board.ts)) is one Durable Object: goals, tasks, deliverables, reviews, events, workers, spend. The public page shows what each worker is doing (live: step, tool call, cost so far, the last session events), the review queue, accepted work, blocked tasks, spend against pace, and what needs a human.
 
 "Persistent" means the board always has ready tasks and the workers always pull the next one. "Little oversight" means the only human inputs are `GOALS.md` and the *needs a human* list on the page.
 

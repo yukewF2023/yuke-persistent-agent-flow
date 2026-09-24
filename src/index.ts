@@ -1,6 +1,6 @@
 import { Board } from "./board";
-import { renderNotFound, renderStatusPage, renderTaskPage, renderUnavailable } from "./pages";
-import type { BoardStatus, Env, Role } from "./types";
+import { renderNotFound, renderStatusPage, renderTaskLive, renderTaskPage, renderUnavailable, renderWorkersLive } from "./pages";
+import type { BoardStatus, Env, LiveStatus, Role } from "./types";
 import { bearerOk, html, json } from "./util";
 
 export { Board };
@@ -23,7 +23,7 @@ export default {
     } else if (parts[0] === "worker") {
       if (!bearerOk(request, env.WORKER_TOKEN)) return json({ error: "unauthorized" }, 401);
       role = "worker";
-    } else if (method !== "GET" || !(parts.length === 0 || parts[0] === "api" || parts[0] === "tasks")) {
+    } else if (method !== "GET" || !(parts.length === 0 || parts[0] === "api" || parts[0] === "tasks" || parts[0] === "live")) {
       return json({ error: "not found" }, 404);
     }
 
@@ -43,6 +43,17 @@ export default {
         const r = await internal("/api/status");
         if (r.error) return html(renderUnavailable(r.error), 503);
         return html(renderStatusPage(r.body as BoardStatus, Date.now()));
+      }
+      // HTML fragments the pages poll: the workers list and one task's live section (a few row reads each, uncached)
+      if (role === "public" && parts[0] === "live" && parts[1] === "workers") {
+        const r = await internal("/api/live");
+        if (r.error) return html(`<li class="muted">live view unavailable: ${r.error}</li>`, 503);
+        return html(renderWorkersLive(r.body as LiveStatus, Date.now()));
+      }
+      if (role === "public" && parts[0] === "live" && parts[1] === "tasks" && parts[2]) {
+        const r = await internal(`/api/tasks/${encodeURIComponent(parts[2])}/progress`);
+        if (r.error) return html(`<span class="muted">live view unavailable: ${r.error}</span>`, r.status === 404 ? 404 : 503);
+        return html(renderTaskLive(r.body as Parameters<typeof renderTaskLive>[0], Date.now()));
       }
       if (role === "public" && parts[0] === "tasks" && parts[1]) {
         const r = await internal(`/api/tasks/${encodeURIComponent(parts[1])}`);
