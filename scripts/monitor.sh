@@ -6,6 +6,7 @@ S=$(curl -sS -m 30 "$WORKER_URL/api/status") || { echo "ANOMALY: board unreachab
 python3 - "$S" <<'PY'
 import json,sys,time
 d=json.loads(sys.argv[1]); now=time.time()*1000; anom=[]
+if "error" in d and "counts" not in d: print("ANOMALY: board error: "+str(d["error"])); sys.exit(0)
 ago=lambda ts: "never" if not ts else "%dm ago"%int((now-ts)/60000)
 c=d["counts"]; s=d["spend"]
 print("# board snapshot", time.strftime("%Y-%m-%d %H:%MZ", time.gmtime()))

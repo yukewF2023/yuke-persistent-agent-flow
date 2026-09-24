@@ -27,6 +27,7 @@ case "$cmd" in
     curl -sS "$WORKER_URL/api/status" | python3 -c '
 import json,sys,time
 d=json.load(sys.stdin); now=time.time()*1000
+if "error" in d and "goals" not in d: print("BOARD ERROR:", d["error"]); sys.exit(2)
 ago=lambda ts: "never" if not ts else ("%dm ago"%int((now-ts)/60000))
 print("GOALS"); 
 for g in d["goals"]:
