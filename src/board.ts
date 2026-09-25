@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import type { BoardStatus, DeliverableRow, Env, EventRow, GoalRow, LiveStatus, ProgressRow, ProgressSnapshot, ReviewRow, Role, SpendSummary, TaskRow, TaskStatus, WorkerRow } from "./types";
+import type { BoardStatus, DeliverableRow, DocMeta, DocRow, Env, EventRow, GoalRow, LiveStatus, ProgressRow, ProgressSnapshot, ReviewRow, Role, SpendSummary, TaskRow, TaskStatus, WorkerRow } from "./types";
 import { json, readJson, secondsToUtcMidnight, utcDayStart } from "./util";
 
 /** OpenCode Go usage windows in USD (the workers' model provider). */
@@ -19,6 +19,11 @@ const METER_FLUSH_MS = 60_000;
 const PROGRESS_MAX_EVENTS = 30;
 const PROGRESS_MAX_BYTES = 12_000;
 const PROGRESS_KEEP_MS = 3 * 86_400_000;
+/** Manager-maintained briefs: one kv row per document, rewritten in place; a short change log beside it. */
+const DOC_MAX_BYTES = 32_000;
+const DOC_LOG_KEEP = 30;
+const DOC_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+const KINDS = ["ts", "py", "check", "other", "doc"];
 const TERMINAL: TaskStatus[] = ["accepted", "rejected", "cancelled"];
 
 const num = (v: unknown, d = 0) => (typeof v === "number" && Number.isFinite(v) ? v : Number(v) || d);
@@ -159,6 +164,9 @@ export class Board extends DurableObject<Env> {
     try {
       this.ctx.storage.sql.exec("ALTER TABLE goals ADD COLUMN catalog_size INTEGER");
     } catch {}
+    try {
+      this.ctx.storage.sql.exec("ALTER TABLE workers ADD COLUMN goals TEXT");
+    } catch {}
   }
 
   // ---- entry ----
@@ -171,6 +179,11 @@ export class Board extends DurableObject<Env> {
       // public
       if (m === "GET" && p[0] === "api" && p[1] === "status") return this.status();
       if (m === "GET" && p[0] === "api" && p[1] === "live") return this.live(Date.now());
+      if (m === "GET" && p[0] === "api" && p[1] === "docs" && !p[2]) return json(this.docIndex());
+      if (m === "GET" && p[0] === "api" && p[1] === "docs" && p[2]) {
+        const d = this.docGet(p[2]);
+        return d ? json(d) : json({ error: "not found" }, 404);
+      }
       if (m === "GET" && p[0] === "api" && p[1] === "tasks" && !p[2]) return json(this.listTasks(url));
       if (m === "GET" && p[0] === "api" && p[1] === "tasks" && p[2] && p[3] === "progress") return this.progressDetail(Number(p[2]));
       if (m === "GET" && p[0] === "api" && p[1] === "tasks" && p[2]) return this.taskDetail(Number(p[2]));
@@ -232,6 +245,7 @@ export class Board extends DurableObject<Env> {
       recentAccepted,
       blocked,
       acceptedToday,
+      docs: this.docIndex(),
       spend: this.spendSummary(now),
       needsHuman: this.kvJson<{ ts: number; text: string }[]>("needs_human") ?? [],
       events,
@@ -312,15 +326,21 @@ export class Board extends DurableObject<Env> {
     const monthUsd = (this.kvJson<{ usd: number }>(`spend:month:${this.today(now).slice(0, 7)}`) ?? { usd: 0 }).usd;
     const fiveHourUsd = Number(this.one<{ s: number }>("SELECT COALESCE(SUM(usd), 0) AS s FROM spend WHERE ts >= ?", now - 5 * 3600_000)?.s ?? 0);
     const pace = Number(this.kvGet("pace_usd_per_day") ?? DEFAULT_PACE_USD_PER_DAY);
+    const paceMode: SpendSummary["paceMode"] = this.kvGet("pace_mode") === "burst" ? "burst" : "smooth";
     const inflight = Number(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM tasks WHERE status IN ('claimed','running')")?.n ?? 0);
     const avg = Number(this.one<{ a: number | null }>("SELECT AVG(usd) AS a FROM (SELECT usd FROM spend ORDER BY id DESC LIMIT 10)")?.a ?? 0) || DEFAULT_TASK_COST_USD;
     const inflightEstimateUsd = inflight * avg;
+    // Smooth mode releases the daily pace hour by hour (20 % at once, then 1/24 per hour) so the workers stay busy all day
+    // instead of spending everything in the first hours after 00:00 UTC.
+    const hourFrac = (now - utcDayStart(now)) / 86_400_000;
+    const allowedNowUsd = paceMode === "burst" ? pace : pace * Math.min(1, Math.max(0.2, hourFrac + 1 / 24));
     let pacing: SpendSummary["pacing"] = null;
     if (fiveHourUsd >= 0.9 * GO_CAPS.fiveHour) pacing = { reason: `Go 5-hour window at 90% ($${fiveHourUsd.toFixed(2)} of $${GO_CAPS.fiveHour})`, retryAfterS: 900 };
     else if (weekUsd >= 0.9 * GO_CAPS.week) pacing = { reason: `Go weekly window at 90% ($${weekUsd.toFixed(2)} of $${GO_CAPS.week})`, retryAfterS: 3600 };
     else if (monthUsd >= 0.9 * GO_CAPS.month) pacing = { reason: `Go monthly window at 90% ($${monthUsd.toFixed(2)} of $${GO_CAPS.month})`, retryAfterS: 3600 };
     else if (todayUsd + inflightEstimateUsd >= pace) pacing = { reason: `daily pace $${pace.toFixed(2)} reached ($${todayUsd.toFixed(2)} spent + $${inflightEstimateUsd.toFixed(2)} in flight); resumes 00:00 UTC`, retryAfterS: Math.min(900, secondsToUtcMidnight(now)) };
-    return { todayUsd, fiveHourUsd, weekUsd, monthUsd, todayTasks, paceUsdPerDay: pace, inflightEstimateUsd, pacing, days };
+    else if (todayUsd + inflightEstimateUsd >= allowedNowUsd) pacing = { reason: `hourly pace: $${allowedNowUsd.toFixed(2)} of today's $${pace.toFixed(2)} released so far ($${todayUsd.toFixed(2)} spent + $${inflightEstimateUsd.toFixed(2)} in flight); more every hour`, retryAfterS: 600 };
+    return { todayUsd, fiveHourUsd, weekUsd, monthUsd, todayTasks, paceUsdPerDay: pace, inflightEstimateUsd, paceMode, allowedNowUsd, pacing, days };
   }
 
   /** Return expired claimed/running tasks to `ready` (lazy; called from claim and status). */
@@ -399,15 +419,20 @@ export class Board extends DurableObject<Env> {
     return json({ error: "not found" }, 404);
   }
 
-  private upsertWorker(id: string, host: string | null, version: string | null, note: string | null, now: number) {
+  private upsertWorker(id: string, host: string | null, version: string | null, note: string | null, now: number, goals: string | null = null) {
     this.run(
-      "INSERT INTO workers(id, host, version, task_id, last_seen, note) VALUES (?, ?, ?, NULL, ?, ?) ON CONFLICT(id) DO UPDATE SET host = COALESCE(excluded.host, workers.host), version = COALESCE(excluded.version, workers.version), last_seen = excluded.last_seen, note = COALESCE(excluded.note, workers.note)",
+      "INSERT INTO workers(id, host, version, task_id, last_seen, note, goals) VALUES (?, ?, ?, NULL, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET host = COALESCE(excluded.host, workers.host), version = COALESCE(excluded.version, workers.version), last_seen = excluded.last_seen, note = COALESCE(excluded.note, workers.note), goals = COALESCE(excluded.goals, workers.goals)",
       id,
       host,
       version,
       now,
-      note
+      note,
+      goals
     );
+  }
+  /** The worker's preferred goal ids from a claim/heartbeat body: `goals: ["C"]` (at most 10 short ids). */
+  private workerGoals(body: Record<string, unknown>): string[] {
+    return (Array.isArray(body.goals) ? body.goals : []).map((g) => str(g, 40)).filter((g) => /^[A-Za-z0-9_-]+$/.test(g)).slice(0, 10);
   }
 
   private claim(body: Record<string, unknown>, now: number): Response {
@@ -419,13 +444,17 @@ export class Board extends DurableObject<Env> {
       return json({ task: null, reason, retry_after_s: secondsToUtcMidnight(now), pacing: true });
     }
     this.sweepLeases(now);
-    this.upsertWorker(workerId, str(body.host, 120) || null, str(body.version, 40) || null, null, now);
+    const prefer = this.workerGoals(body);
+    this.upsertWorker(workerId, str(body.host, 120) || null, str(body.version, 40) || null, null, now, prefer.length ? JSON.stringify(prefer) : null);
     const spend = this.spendSummary(now);
     if (spend.pacing) {
       this.run("UPDATE workers SET note = ? WHERE id = ?", `pacing: ${spend.pacing.reason}`, workerId);
       return json({ task: null, reason: spend.pacing.reason, retry_after_s: spend.pacing.retryAfterS, pacing: true });
     }
-    const candidates = this.q<TaskRow>("SELECT t.* FROM tasks t JOIN goals g ON g.id = t.goal_id WHERE t.status = 'ready' AND g.status = 'active' ORDER BY t.priority, t.id LIMIT 20");
+    // a worker with preferred goals takes their tasks first and falls back to any goal, so nobody sits idle while work exists
+    const candidates = prefer.length
+      ? this.q<TaskRow>(`SELECT t.* FROM tasks t JOIN goals g ON g.id = t.goal_id WHERE t.status = 'ready' AND g.status = 'active' ORDER BY CASE WHEN t.goal_id IN (${prefer.map(() => "?").join(",")}) THEN 0 ELSE 1 END, t.priority, t.id LIMIT 20`, ...prefer)
+      : this.q<TaskRow>("SELECT t.* FROM tasks t JOIN goals g ON g.id = t.goal_id WHERE t.status = 'ready' AND g.status = 'active' ORDER BY t.priority, t.id LIMIT 20");
     let waiting = 0;
     for (const c of candidates) {
       const deps = (JSON.parse(c.deps) as number[]).filter((d) => Number.isInteger(d));
@@ -465,7 +494,8 @@ export class Board extends DurableObject<Env> {
   private heartbeat(body: Record<string, unknown>, now: number): Response {
     const workerId = str(body.worker_id, 80);
     if (!workerId) return json({ error: "worker_id required" }, 400);
-    this.upsertWorker(workerId, str(body.host, 120) || null, str(body.version, 40) || null, str(body.note, 200) || null, now);
+    const prefer = this.workerGoals(body);
+    this.upsertWorker(workerId, str(body.host, 120) || null, str(body.version, 40) || null, str(body.note, 200) || null, now, prefer.length ? JSON.stringify(prefer) : null);
     const taskId = body.task_id === undefined || body.task_id === null ? null : num(body.task_id);
     if (taskId !== null) {
       const task = this.one<TaskRow>("SELECT * FROM tasks WHERE id = ?", taskId);
@@ -652,7 +682,31 @@ export class Board extends DurableObject<Env> {
       this.touch();
       return json({ ok: true, bytes: text.length });
     }
-    if (p[0] === "pace" && m === "GET") return json({ usd_per_day: Number(this.kvGet("pace_usd_per_day") ?? DEFAULT_PACE_USD_PER_DAY), spend: this.spendSummary(now) });
+    if (p[0] === "pace" && m === "GET") return json({ usd_per_day: Number(this.kvGet("pace_usd_per_day") ?? DEFAULT_PACE_USD_PER_DAY), mode: this.kvGet("pace_mode") === "burst" ? "burst" : "smooth", spend: this.spendSummary(now) });
+    if (p[0] === "pace-mode" && m === "PUT") {
+      const body = await readJson<{ mode?: unknown }>(request);
+      const mode = body.mode === "burst" ? "burst" : body.mode === "smooth" ? "smooth" : null;
+      if (!mode) return json({ error: "mode must be smooth or burst" }, 400);
+      this.kvSet("pace_mode", mode);
+      this.event("manager", "pace.set", null, `pace mode set to ${mode}`);
+      this.touch();
+      return json({ ok: true, mode });
+    }
+    if (p[0] === "docs" && !p[1] && m === "GET") return json(this.docIndex());
+    if (p[0] === "docs" && p[1] && m === "GET") {
+      const d = this.docGet(p[1]);
+      return d ? json(d) : json({ error: "not found" }, 404);
+    }
+    if (p[0] === "docs" && p[1] && m === "PUT") return this.docPut(p[1], await readJson(request), now);
+    if (p[0] === "docs" && p[1] && m === "DELETE") {
+      if (!DOC_ID.test(p[1])) return json({ error: "bad id" }, 400);
+      this.kvSet(`doc:${p[1]}`, null);
+      this.kvSet(`doc:${p[1]}:log`, null);
+      this.kvSet("docs:index", JSON.stringify(this.docIndex().filter((d) => d.id !== p[1])));
+      this.event("manager", "doc.delete", null, `brief ${p[1]} deleted`);
+      this.touch();
+      return json({ ok: true });
+    }
     if (p[0] === "pace" && m === "PUT") {
       const body = await readJson<{ usd_per_day?: unknown }>(request);
       const v = num(body.usd_per_day);
@@ -736,6 +790,37 @@ export class Board extends DurableObject<Env> {
     return json({ error: "not found" }, 404);
   }
 
+  // ---- briefs: manager-maintained documents, rewritten in place ----
+  private docIndex(): DocMeta[] {
+    return this.kvJson<DocMeta[]>("docs:index") ?? [];
+  }
+  private docGet(id: string): DocRow | null {
+    if (!DOC_ID.test(id)) return null;
+    const d = this.kvJson<Omit<DocRow, "log">>(`doc:${id}`);
+    if (!d) return null;
+    return { ...d, log: this.kvJson<DocRow["log"]>(`doc:${id}:log`) ?? [] };
+  }
+  /** PUT /manager/docs/:id {title, body, note} — replaces the whole document (the manager rewrites, never appends). */
+  private docPut(id: string, body: Record<string, unknown>, now: number): Response {
+    if (!DOC_ID.test(id)) return json({ error: "id must be lowercase letters, digits and dashes (max 40)" }, 400);
+    const text = str(body.body, DOC_MAX_BYTES + 1);
+    if (!text.trim()) return json({ error: "body required" }, 400);
+    if (text.length > DOC_MAX_BYTES) return json({ error: `body too long (${text.length} > ${DOC_MAX_BYTES} bytes); rewrite it shorter` }, 413);
+    const prev = this.kvJson<Omit<DocRow, "log">>(`doc:${id}`);
+    const version = (prev?.version ?? 0) + 1;
+    const title = str(body.title, 120) || prev?.title || id;
+    const note = str(body.note, 200) || null;
+    const meta: DocMeta = { id, title, version, updated_at: now, bytes: text.length, note };
+    this.kvSet(`doc:${id}`, JSON.stringify({ ...meta, body: text }));
+    const log = (this.kvJson<DocRow["log"]>(`doc:${id}:log`) ?? []).concat([{ ts: now, version, note, bytes: text.length }]).slice(-DOC_LOG_KEEP);
+    this.kvSet(`doc:${id}:log`, JSON.stringify(log));
+    const index = this.docIndex().filter((d) => d.id !== id).concat([meta]).sort((a, b) => a.id.localeCompare(b.id));
+    this.kvSet("docs:index", JSON.stringify(index));
+    this.event("manager", "doc.update", null, `brief ${id} v${version}${note ? `: ${note}` : ""} (${text.length} bytes)`);
+    this.touch();
+    return json({ ok: true, version, bytes: text.length });
+  }
+
   private createTasks(body: unknown, now: number): Response {
     const list = (Array.isArray(body) ? body : (body as { tasks?: unknown[] })?.tasks ?? []) as Record<string, unknown>[];
     if (!list.length) return json({ error: "expected an array of tasks" }, 400);
@@ -766,7 +851,7 @@ export class Board extends DurableObject<Env> {
         skipped.push({ key, reason: depError });
         continue;
       }
-      const kind = ["ts", "py", "check", "other"].includes(String(t.kind)) ? String(t.kind) : "ts";
+      const kind = KINDS.includes(String(t.kind)) ? String(t.kind) : "ts";
       if (this.one<{ id: number }>("SELECT id FROM tasks WHERE key = ?", key)) {
         skipped.push({ key, reason: "duplicate key" });
         continue;

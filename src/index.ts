@@ -1,7 +1,7 @@
 import { Board } from "./board";
 import { getFile, getRawFile, putFile } from "./github";
-import { renderAgents, renderGoalsPage, renderNotFound, renderStatusPage, renderTaskLive, renderTaskPage, renderUnavailable, renderWakeResult } from "./pages";
-import type { BoardStatus, Env, LiveStatus, Role } from "./types";
+import { renderAgents, renderDocPage, renderGoalsPage, renderNotFound, renderStatusPage, renderTaskLive, renderTaskPage, renderUnavailable, renderWakeResult } from "./pages";
+import type { BoardStatus, DocRow, Env, LiveStatus, Role } from "./types";
 import { bearerOk, html, json, timingSafeEqual } from "./util";
 
 export { Board };
@@ -67,7 +67,7 @@ export default {
       if (!bearerOk(request, env.WORKER_TOKEN)) return json({ error: "unauthorized" }, 401);
       role = "worker";
     } else {
-      const publicGet = method === "GET" && (parts.length === 0 || ["api", "tasks", "live", "goals"].includes(parts[0]));
+      const publicGet = method === "GET" && (parts.length === 0 || ["api", "tasks", "live", "goals", "docs"].includes(parts[0]));
       const publicPost = method === "POST" && parts.length === 1 && (parts[0] === "goals" || parts[0] === "wake");
       if (!publicGet && !publicPost) return json({ error: "not found" }, 404);
     }
@@ -150,6 +150,17 @@ export default {
         const r = await internal(`/api/tasks/${encodeURIComponent(parts[2])}/progress`);
         if (r.error) return html(`<span class="muted">live view unavailable: ${r.error}</span>`, r.status === 404 ? 404 : 503);
         return html(renderTaskLive(r.body as Parameters<typeof renderTaskLive>[0], Date.now()));
+      }
+      // briefs the manager maintains: /docs/<id> renders it, /docs/<id>.md is the raw markdown
+      if (role === "public" && parts[0] === "docs" && parts[1]) {
+        const raw = parts[1].endsWith(".md");
+        const id = raw ? parts[1].slice(0, -3) : parts[1];
+        const r = await internal(`/api/docs/${encodeURIComponent(id)}`);
+        if (r.status === 404) return html(renderNotFound(), 404);
+        if (r.error) return html(renderUnavailable(r.error), 503);
+        const doc = r.body as DocRow;
+        if (raw) return new Response(doc.body, { headers: { "content-type": "text/markdown; charset=utf-8", "cache-control": "no-store" } });
+        return html(renderDocPage(doc, Date.now()));
       }
       if (role === "public" && parts[0] === "tasks" && parts[1]) {
         const r = await internal(`/api/tasks/${encodeURIComponent(parts[1])}`);

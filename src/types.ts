@@ -19,7 +19,7 @@ export interface Env {
 export type Role = "public" | "manager" | "worker";
 
 export type TaskStatus = "ready" | "claimed" | "running" | "review" | "accepted" | "rejected" | "blocked" | "cancelled";
-export type TaskKind = "ts" | "py" | "check" | "other";
+export type TaskKind = "ts" | "py" | "check" | "other" | "doc";
 
 export interface GoalRow {
   id: string;
@@ -147,11 +147,27 @@ export interface WorkerRow {
   id: string;
   host: string | null;
   version: string | null;
+  /** goal ids this worker prefers to claim from (JSON string[]), or null */
+  goals: string | null;
   task_id: number | null;
   last_seen: number;
   note: string | null;
   tasks_done: number;
   tasks_failed: number;
+}
+
+/** A manager-maintained document (brief) on the board: rewritten in place, never appended. */
+export interface DocMeta {
+  id: string;
+  title: string;
+  version: number;
+  updated_at: number;
+  bytes: number;
+  note: string | null;
+}
+export interface DocRow extends DocMeta {
+  body: string;
+  log: { ts: number; version: number; note: string | null; bytes: number }[];
 }
 
 export interface SpendSummary {
@@ -162,6 +178,10 @@ export interface SpendSummary {
   todayTasks: number;
   paceUsdPerDay: number;
   inflightEstimateUsd: number;
+  /** "smooth": the daily pace is released hour by hour; "burst": all of it from 00:00 UTC */
+  paceMode: "smooth" | "burst";
+  /** how much of today's pace is released right now (equals the pace in burst mode) */
+  allowedNowUsd: number;
   pacing: { reason: string; retryAfterS: number } | null;
   /** the last 7 UTC days, today first */
   days: { day: string; usd: number; tasks: number }[];
@@ -189,6 +209,8 @@ export interface BoardStatus {
   blocked: Pick<TaskRow, "id" | "key" | "title" | "last_error" | "attempt" | "goal_id">[];
   /** tasks accepted since 00:00 UTC (one index-bounded count) */
   acceptedToday: number;
+  /** the manager-maintained briefs (metadata only; bodies at /api/docs/<id>) */
+  docs: DocMeta[];
   spend: SpendSummary;
   needsHuman: { ts: number; text: string }[];
   events: EventRow[];

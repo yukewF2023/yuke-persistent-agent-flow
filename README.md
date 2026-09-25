@@ -8,11 +8,11 @@ Live board: **https://yuke-persistent-agent-flow.yuke-521.workers.dev**
 
 Think of a small team with one manager and two junior engineers who never sleep.
 
-- **You** write what you want in one file, `GOALS.md`. Today that is Goal A, "build a tested TypeScript algorithms library, one module per item from this catalog", and Goal B, "port each accepted module to Python and prove both agree on random inputs".
-- **The manager is Claude.** Twice an hour it wakes up in a fresh sandbox, reads the goals, and looks at the board. For every piece of work the engineers handed in, it downloads the files and actually runs the tests and type checks. If everything in the acceptance list holds, it accepts; if not, it sends the task back with numbered fixes; after three failed attempts it blocks the task and flags it for you. Then it looks at how many tasks are waiting and, if a goal is running low, writes the next few tasks from the catalog, each with a precise spec and a checklist. It saves a tiny note to itself and goes back to sleep.
-- **The engineers are DeepSeek.** Two worker processes on a small VM sit in a loop: ask the board for the next task, get a fresh folder with the spec, run an `opencode` session with DeepSeek V4.1 Flash that writes the code and runs the tests, package everything under `out/` plus a short report, hand it in, and ask for the next one. If a session hangs or the VM restarts, the lease expires and the task simply goes back on the board.
+- **You** write what you want in one file, `GOALS.md`. Today that is Goal C, "a standing research desk on how DeepSpace wins business customers", and Goal D, the same for individual builders; the earlier Goal A (a TypeScript algorithms library) and Goal B (its Python port with cross-checks) are paused and can be switched back on with one line.
+- **The manager is Claude.** Twice an hour (and within a minute of any push to `main`) it wakes up in a fresh sandbox, reads the goals, and looks at the board. For code tasks it downloads the files and actually runs the tests and type checks: accept, or send back with numbered fixes, or block after three attempts and flag it for you. For research tasks it reads the memo, keeps what is sourced and specific, and then rewrites the goal's **brief** on the board, a living one-page summary for you that it maintains in place (ranked recommendations, what we know, competitor table, open questions), never a growing log. Then it tops up the queue from the goal's catalog, in rounds, so the desk never runs dry. It saves a tiny note to itself and goes back to sleep.
+- **The engineers are DeepSeek.** Two worker processes on a small VM sit in a loop: ask the board for the next task (worker 1 prefers Goal C, worker 2 prefers Goal D), get a fresh folder with the spec, run an `opencode` session with DeepSeek V4.1 Flash that does the work (code and tests, or web research and a memo), package everything under `out/` plus a short report, hand it in, and ask for the next one. If a session hangs or the VM restarts, the lease expires and the task simply goes back on the board.
 - **The board is a Cloudflare Worker.** It is the only shared memory: goals, tasks, who holds what, submitted files, reviews, a log, and spend. Its public page shows all of it live.
-- **Money is the throttle.** Each task's tokens are priced at OpenCode Go rates and the board refuses new claims once the day's spend reaches the pace (default $1.60, about 20 tasks). So "constantly working" means the workers are always either running a task or waiting for budget, never waiting for a human.
+- **Money is the throttle.** Each task's tokens are priced at OpenCode Go rates and the board releases the day's pace hour by hour (default $1.60 a day, 20 % at 00:00 UTC and the rest spread over the day), refusing new claims when spend runs ahead of it. So "constantly working" means the workers are always either running a task or waiting a few minutes for budget, never waiting for a human.
 
 Nothing remembers anything between sessions except the board: every opencode session and every manager run starts from scratch and reads the board. The board itself is durable SQLite inside a Cloudflare Durable Object, and the VM downloads a full copy every night to `/srv/backups`.
 
@@ -43,6 +43,7 @@ A task moves through these states:
 
 | What | Where |
 |---|---|
+| The briefs the manager maintains for you (one per research goal, rewritten in place, with a change log) | https://yuke-persistent-agent-flow.yuke-521.workers.dev/docs/gtm-b2b and `/docs/gtm-b2c`, listed under "Briefs for you" on the Overview; raw markdown at `/docs/<id>.md` |
 | The board: a status strip (workers, ready, in progress, review, accepted today, blocked, spend, manager) above tabs: **Overview** (pipeline bar, agents, needs-attention, recent activity, goals progress), **Pipeline** (ready / in progress / review / accepted / blocked columns), **Agents** (the manager and each worker, live), **Goals** (progress and the goal bodies), **Activity** (every event, filterable), **Budget** (Go windows, last 7 days, Cloudflare free tier) | https://yuke-persistent-agent-flow.yuke-521.workers.dev — the tab is in the URL hash (`/#pipeline`, `/#agents`, `/#activity`…), so a bookmark opens straight to it; with JavaScript off the same page shows every section top to bottom |
 | One task: spec, acceptance checklist, every review verdict, the report and the files | click any task on the board (`/tasks/<id>`) |
 | What a worker is doing right now: step, current tool call, tokens and cost so far, the last 30 session events | the [Agents tab](https://yuke-persistent-agent-flow.yuke-521.workers.dev/#agents) (refreshes every 20 s) and the "Live session" section of the running task's page; JSON at `/api/live` and `/api/tasks/<id>/progress` |
@@ -96,7 +97,7 @@ Workers: see [worker/README.md](worker/README.md) (three gcloud commands). Manag
 
 ## Day to day
 
-- `scripts/board.sh status` — the whole board in one screen; `scripts/board.sh` alone lists every command (tasks, task, accept, reject, tasks-add, pace, needs-human, events…).
+- `scripts/board.sh status` — the whole board in one screen; `scripts/board.sh` alone lists every command (tasks, task, accept, reject, tasks-add, pace, pace-mode, docs, doc-get, doc-put, needs-human, events…).
 - `scripts/monitor.sh` — one-shot health snapshot with anomalies.
 - `scripts/board.sh manager-now` — run the manager loop from a laptop instead of waiting for the routine; `scripts/board.sh wake "why"` — start a cloud run now (see [manager/ROUTINE.md](manager/ROUTINE.md)).
 - Edit the goals on [/goals](https://yuke-persistent-agent-flow.yuke-521.workers.dev/goals) (one commit per save) or edit [GOALS.md](GOALS.md) and push: the push wakes the manager within about a minute.
@@ -104,7 +105,7 @@ Workers: see [worker/README.md](worker/README.md) (three gcloud commands). Manag
 ## Layout
 
 ```
-GOALS.md            the goals (Goal A: TypeScript algorithms library; Goal B: Python port + differential cross-checks)
+GOALS.md            the goals (C: DeepSpace B2B go-to-market desk; D: DeepSpace B2C growth desk; A and B, the algorithms library and its Python port, paused)
 manager/            PROMPT.md (the manager loop), ROUTINE.md (how the routine is configured)
 worker/             worker.mjs (the loop), install.sh (VM bootstrap), agent-worker@.service, templates/, run-tests, README.md
 scripts/            board.sh (CLI), monitor.sh, setup-env.mjs

@@ -30,6 +30,11 @@ if [ ! -f /etc/agent-worker.env ]; then
   [ -f "$SRC/agent-worker.env" ] || { echo "missing /etc/agent-worker.env (or $SRC/agent-worker.env)"; exit 1; }
   install -m 600 -o root -g root "$SRC/agent-worker.env" /etc/agent-worker.env
 fi
+# per-worker preferences: WORKER_GOALS_1=C / WORKER_GOALS_2=D in the shipped agent-worker.env become /etc/agent-worker-<n>.env
+for i in 1 2; do
+  v="$(grep "^WORKER_GOALS_$i=" "$SRC/agent-worker.env" 2>/dev/null | cut -d= -f2- || true)"
+  if [ -n "$v" ]; then printf 'WORKER_GOALS=%s\n' "$v" > "/etc/agent-worker-$i.env"; chmod 644 "/etc/agent-worker-$i.env"; echo "worker $i prefers goals $v"; fi
+done
 install -m 755 "$SRC/worker.mjs" /srv/agent/worker.mjs
 install -m 755 "$SRC/run-tests" /srv/templates/run-tests
 install -m 755 "$SRC/board-backup" /usr/local/bin/board-backup

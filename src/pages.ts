@@ -1,4 +1,4 @@
-import type { BoardStatus, DeliverableRow, EventRow, LiveStatus, ProgressEvent, ProgressSnapshot, ReviewRow, TaskRow } from "./types";
+import type { BoardStatus, DeliverableRow, DocRow, EventRow, LiveStatus, ProgressEvent, ProgressSnapshot, ReviewRow, TaskRow } from "./types";
 import { ago, dur, esc, usd, when } from "./util";
 
 /**
@@ -28,7 +28,9 @@ nav.tabs{display:flex;gap:2px;margin:0 0 14px;border-bottom:1px solid var(--line
 .pipe{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--panel2);border:1px solid var(--line)}.pipe a{display:block;height:100%}.pipe .c-ready{background:var(--dim)}.pipe .c-prog{background:var(--accent)}.pipe .c-review{background:var(--warn)}.pipe .c-acc{background:var(--ok)}.pipe .c-blocked{background:var(--bad)}.pipe .c-dropped{background:var(--line)}
 .legend{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:8px;font-size:12.5px;color:var(--muted)}.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:-1px}.legend b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}.legend a{color:inherit}
 .pill{display:inline-block;font-size:11.5px;line-height:1.6;padding:0 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap;vertical-align:middle}.pill.ok{color:var(--ok);border-color:var(--ok)}.pill.bad{color:var(--bad);border-color:var(--bad)}.pill.warn{color:var(--warn);border-color:var(--warn)}.pill.accent{color:var(--accent);border-color:var(--accent)}
-.chip{display:inline-block;font:10.5px/1.7 var(--mono);padding:0 5px;border-radius:4px;color:#fff;vertical-align:1px;margin-right:6px;min-width:16px;text-align:center}.chip.A{background:#3b6fd6}.chip.B{background:#2c9a6a}.chip.X{background:#8a5cc7}.chip.o{background:var(--dim)}
+.chip{display:inline-block;font:10.5px/1.7 var(--mono);padding:0 5px;border-radius:4px;color:#fff;vertical-align:1px;margin-right:6px;min-width:16px;text-align:center}.chip.A{background:#3b6fd6}.chip.B{background:#2c9a6a}.chip.X{background:#8a5cc7}.chip.C{background:#d1652b}.chip.D{background:#c2417a}.chip.o{background:var(--dim)}
+.docs{list-style:none;margin:0;padding:0}.docs li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:8px 0;border-bottom:1px solid var(--line);align-items:baseline}.docs li:last-child{border-bottom:0}.docs .t{font-weight:500}.docs .s{grid-column:1;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.docs .m{grid-column:2;grid-row:1/3;font-size:12px;color:var(--muted);white-space:nowrap;text-align:right}
+.doc{max-width:860px}.doc .md h4{font-size:17px;margin:22px 0 8px}.doc .md h5{font-size:14.5px;margin:16px 0 6px}.doc .md p,.doc .md li{font-size:14px}.doc .md table{border-collapse:collapse;font-size:13px;margin:8px 0}.doc .md td,.doc .md th{border:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top}
 .tasks{list-style:none;margin:0;padding:0}.tasks li{border-bottom:1px solid var(--line)}.tasks li:last-child{border-bottom:0}.task{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:1px 10px;align-items:baseline;padding:7px 0;color:var(--fg)}.task:hover{text-decoration:none}.task:hover .t{color:var(--accent)}.task .t{grid-column:1/3;font-weight:500;line-height:1.35;overflow-wrap:anywhere}.task .k{grid-column:1;font:11.5px var(--mono);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task .m{grid-column:2;font-size:11.5px;color:var(--muted);text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.task .live{grid-column:1/3;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cols{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(236px,1fr))}.more{font-size:12px;color:var(--muted);padding-top:6px}.empty{color:var(--dim);font-size:13px;padding:6px 0}
 .scroll{overflow-x:auto}.tbl{width:100%;border-collapse:collapse;font-size:13px}.tbl th{text-align:left;font-weight:500;color:var(--muted);font-size:12px;padding:0 10px 6px 0;border-bottom:1px solid var(--line);white-space:nowrap}.tbl td{padding:7px 10px 7px 0;border-bottom:1px solid var(--line);vertical-align:middle;font-variant-numeric:tabular-nums}.tbl tr:last-child td{border-bottom:0}.tbl td.r,.tbl th.r{text-align:right;padding-right:0}.tbl td.prog{min-width:160px}
@@ -105,11 +107,11 @@ const statusPill = (s: string) => {
   const cls = s === "accepted" ? "ok" : s === "blocked" || s === "rejected" ? "bad" : s === "review" ? "warn" : s === "running" || s === "claimed" ? "accent" : "";
   return `<span class="pill ${cls}">${esc(s)}</span>`;
 };
-const CHIP_TITLE: Record<string, string> = { A: "Goal A · TypeScript module", B: "Goal B · Python port", X: "Goal B · cross-check (TS vs Python)" };
+const CHIP_TITLE: Record<string, string> = { A: "Goal A · TypeScript module", B: "Goal B · Python port", X: "Goal B · cross-check (TS vs Python)", C: "Goal C · B2B go-to-market", D: "Goal D · B2C growth" };
 /** Goal chip from the task key prefix (A/…, B/…, X/…) or the goal id. */
 const chip = (key: string, goalId?: string | null) => {
   const p = /^([A-Za-z0-9]+)\//.exec(key)?.[1] ?? goalId ?? "";
-  const cls = ["A", "B", "X"].includes(p) ? p : "o";
+  const cls = ["A", "B", "X", "C", "D"].includes(p) ? p : "o";
   return `<span class="chip ${cls}" title="${esc(CHIP_TITLE[p] ?? `goal ${goalId ?? p}`)}">${esc(p || "·")}</span>`;
 };
 const k = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
@@ -151,7 +153,9 @@ const KIND_LABEL: Record<string, [string, string]> = {
   "pace.set": ["pace", ""],
   "needs-human": ["needs a human", "bad"],
   "manager.wake": ["wake", ""],
-  "goals.edit": ["goals edited", "accent"]
+  "goals.edit": ["goals edited", "accent"],
+  "doc.update": ["brief updated", "ok"],
+  "doc.delete": ["brief deleted", "warn"]
 };
 const kindLabel = (kind: string) => KIND_LABEL[kind]?.[0] ?? kind;
 const kindCls = (kind: string) => KIND_LABEL[kind]?.[1] ?? "";
@@ -194,10 +198,26 @@ function md(text: string): string {
       list = false;
     }
   };
+  let table: string[][] = [];
+  const endTable = () => {
+    if (table.length) {
+      const [head, ...rows] = table;
+      out += `<table><tr>${head.map((c) => `<th>${inline(c)}</th>`).join("")}</tr>${rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</table>`;
+      table = [];
+    }
+  };
   for (const raw of esc(text).split("\n")) {
     const line = raw.replace(/\s+$/, "");
     const h = /^(#{1,3}) (.+)$/.exec(line);
-    const li = /^- (.+)$/.exec(line);
+    const li = /^(?:- |\* |\d+\. )(.+)$/.exec(line);
+    if (/^\|.*\|$/.test(line)) {
+      flush();
+      endList();
+      const cells = line.slice(1, -1).split("|").map((c) => c.trim());
+      if (!cells.every((c) => /^:?-{2,}:?$/.test(c))) table.push(cells);
+      continue;
+    }
+    endTable();
     if (h) {
       flush();
       endList();
@@ -219,6 +239,7 @@ function md(text: string): string {
   }
   flush();
   endList();
+  endTable();
   return out;
 }
 
@@ -297,7 +318,12 @@ export function renderAgents(s: Pick<LiveStatus, "workers" | "running" | "progre
       const budget = task && snap ? meter(liveElapsed(snap, now, true), task.max_minutes * 60, 0.75, 0.95) : "";
       const stats = `<div class="kv small"><span>done <b>${w.tasks_done}</b></span><span>failed <b>${w.tasks_failed}</b></span>${snap ? `<span>cost <b>${usd(snap.cost_usd, 3)}</b></span><span>tokens <b>${k(snap.tokens_in + snap.tokens_out)}</b></span><span>tool calls <b>${snap.tools}</b></span>` : ""}${task ? `<span>budget <b>${task.max_minutes} min</b></span>` : ""}${snap?.session_url ? `<span><a href="${esc(snap.session_url)}" rel="noopener">transcript ↗</a></span>` : ""}</div>`;
       const feed = snap && !offline && w.task_id ? `<details class="fold"${open ? " open" : ""}><summary>last ${snap.events.length} events</summary>${liveFeed(snap)}</details>` : "";
-      return `<div class="agent"><div class="ah"><span class="dot ${dot}"></span><b>${esc(workerName(w.id))}</b><span class="model">DeepSeek V4.1 Flash · opencode${w.host ? ` · ${esc(w.host)}` : ""}</span><span class="pill ${state[0]}">${state[1]}</span></div><div class="now">${nowLine}</div>${budget}${stats}${feed}</div>`;
+      let prefers = "";
+      try {
+        const g = w.goals ? (JSON.parse(w.goals) as string[]) : [];
+        if (g.length) prefers = ` · prefers ${g.map((x) => `<span class="chip ${["A", "B", "X", "C", "D"].includes(x) ? x : "o"}" title="${esc(CHIP_TITLE[x] ?? `goal ${x}`)}">${esc(x)}</span>`).join("")}`;
+      } catch {}
+      return `<div class="agent"><div class="ah"><span class="dot ${dot}"></span><b>${esc(workerName(w.id))}</b><span class="model">DeepSeek V4.1 Flash · opencode${w.host ? ` · ${esc(w.host)}` : ""}${prefers}</span><span class="pill ${state[0]}">${state[1]}</span></div><div class="now">${nowLine}</div>${budget}${stats}${feed}</div>`;
     })
     .join("");
 }
@@ -354,7 +380,7 @@ export function renderStatusPage(s: BoardStatus, now: number): string {
 <div class="tile ${c("review") > 10 ? "warn" : ""}"><div class="l">Review</div><div class="v">${c("review")}</div><div class="s">awaiting the manager</div></div>
 <div class="tile ok"><div class="l">Accepted</div><div class="v">${s.acceptedToday}<small>today</small></div><div class="s">${c("accepted")} in total</div></div>
 <div class="tile ${c("blocked") ? "bad" : ""}"><div class="l">Blocked</div><div class="v">${c("blocked")}</div><div class="s">${c("blocked") ? "need a human" : "none"}</div></div>
-<div class="tile ${sp.pacing ? "warn" : ""}"><div class="l">Spend today</div><div class="v">${usd(sp.todayUsd)}<small>/ ${usd(sp.paceUsdPerDay)}</small></div>${meter(sp.todayUsd, sp.paceUsdPerDay, 0.8, 1)}</div>
+<div class="tile ${sp.pacing ? "warn" : ""}"><div class="l">Spend today</div><div class="v">${usd(sp.todayUsd)}<small>/ ${usd(sp.paceUsdPerDay)}</small></div>${meter(sp.todayUsd, sp.paceUsdPerDay, 0.8, 1)}<div class="s">${sp.paceMode === "smooth" ? `${usd(sp.allowedNowUsd)} released so far` : "burst pace"}</div></div>
 <div class="tile ${running ? "accent" : managerSilent ? "warn" : ""}"><div class="l">Manager</div><div class="v">${running ? "running" : s.manager.lastRunAt ? ago(s.manager.lastRunAt, now) : "never"}</div><div class="s">${running ? "reviewing and planning" : `next ${hhmm(next)} UTC`}</div></div>
 </div>`;
 
@@ -393,6 +419,11 @@ export function renderStatusPage(s: BoardStatus, now: number): string {
   <div class="panel"><div class="ph"><h2>Needs attention</h2><span class="r">${s.needsHuman.length + s.blocked.length ? `${s.needsHuman.length + s.blocked.length} item${s.needsHuman.length + s.blocked.length === 1 ? "" : "s"}` : "all clear"}</span></div>${attention(s, now)}
   <h3>Recent activity</h3><ul class="evt">${s.events.slice(0, 8).map(eventLi).join("") || `<li class="empty">nothing yet</li>`}</ul><div class="more"><a href="#activity">full activity log</a></div></div>
 </div>
+<div class="panel"><div class="ph"><h2>Briefs for you</h2><span class="r">maintained by the manager · rewritten, never appended</span></div>${
+  s.docs.length
+    ? `<ul class="docs">${s.docs.map((d) => `<li><a class="t" href="/docs/${esc(d.id)}">${esc(d.title)}</a><span class="s">${d.note ? esc(d.note) : "no change note"}</span><span class="m">v${d.version} · ${ago(d.updated_at, now)} · ${Math.round(d.bytes / 1024)} KB</span></li>`).join("")}</ul>`
+    : `<div class="empty">no briefs yet — the manager writes one per research goal once it has reviewed the first memos</div>`
+}</div>
 <div class="panel"><div class="ph"><h2>Goals</h2><span class="r"><a href="#goals">bodies</a> · <a href="/goals">edit</a></span></div>${goalsTable}</div>
 <details class="help"><summary>How this board works, and where to look</summary><ul>
 <li><b>The loop.</b> You write goals in GOALS.md (the <a href="/goals">editor</a> commits it). The manager, a scheduled Claude routine, turns them into tasks with acceptance criteria, keeps the queue stocked, and reviews every deliverable by running its tests: accept, send back with notes, or split. Two DeepSeek workers on a small VM pull tasks continuously, paced by the OpenCode Go allowance. Sessions are disposable; this board is the memory.</li>
@@ -450,7 +481,7 @@ ${s.goals
     ${bar("today", sp.todayUsd, sp.paceUsdPerDay)}${bar("5 h", sp.fiveHourUsd, 12)}${bar("week", sp.weekUsd, 30)}${bar("month", sp.monthUsd, 60)}
     <div class="kv"><span>tasks today <b>${sp.todayTasks}</b></span><span>avg per task <b>${usd(sp.todayTasks ? sp.todayUsd / sp.todayTasks : 0, 3)}</b></span><span>in flight est. <b>${usd(sp.inflightEstimateUsd)}</b></span><span>daily pace <b>${usd(sp.paceUsdPerDay)}</b></span></div>
     ${sp.pacing ? `<span class="pill warn">paused</span> <span class="muted small">${esc(sp.pacing.reason)}</span>` : `<span class="pill ok">within pace</span>`}
-    <p class="muted small" style="margin:10px 0 0">Claims stop when today's spend plus the in-flight estimate reaches the daily pace, or when a Go window (5 h $12, week $30, month $60) is at 90 %; the manager moves the pace between $0.50 and $2.50. Peak pricing ×2 on weekdays 01–04 and 06–10 UTC.</p>
+    <p class="muted small" style="margin:10px 0 0">${sp.paceMode === "smooth" ? `Smooth pace: 20 % of the day's pace is released at 00:00 UTC and the rest hour by hour (${usd(sp.allowedNowUsd)} released so far), so the workers stay busy all day instead of spending everything in the first hours.` : "Burst pace: the whole day's pace is available from 00:00 UTC."} Claims also stop when a Go window (5 h $12, week $30, month $60) is at 90 %; the manager moves the pace between $0.50 and $2.50, and <code>scripts/board.sh pace-mode</code> switches the mode. Peak pricing ×2 on weekdays 01–04 and 06–10 UTC.</p>
   </div>
   <div class="panel"><div class="ph"><h2>Last 7 days</h2><span class="r">UTC · spend and attempts ended</span></div>
     <div class="days">${days.map((d) => `<div class="d"><span>${esc(d.day.slice(5))}${d.day === cf.day ? " <span class=\"dim\">today</span>" : ""}</span>${meter(d.usd, maxDay, 2, 2)}<b>${usd(d.usd, 3)}</b><span class="right">${d.tasks}</span></div>`).join("")}</div>
@@ -559,6 +590,19 @@ ${banner}${setup}
 <li>The board token is the manager's <code>ORCHESTRATOR_TOKEN</code> (from <code>.dev.vars</code>); this browser remembers it once you save.</li></ul></details>
 <script>${GOALS_JS}</script>`;
   return shell("Goals editor · Agent board", body, null);
+}
+
+/** /docs/<id> — a manager-maintained brief, rendered from markdown, with its change log. */
+export function renderDocPage(d: DocRow, now: number): string {
+  const body = `
+<header class="hdr"><div><div class="sub"><a href="/">← board</a> · brief</div><h1>${esc(d.title)}</h1><div class="sub">version ${d.version} · updated ${ago(d.updated_at, now)} (${when(d.updated_at)}) · ${Math.round(d.bytes / 1024)} KB${d.note ? ` · ${esc(d.note)}` : ""}</div></div><div class="hdr-r"><a href="/docs/${esc(d.id)}.md">markdown</a><a href="/api/docs/${esc(d.id)}">JSON</a></div></header>
+<div class="panel doc"><div class="md">${md(d.body)}</div></div>
+<div class="panel"><div class="ph"><h2>Changes</h2><span class="r">the manager rewrites this brief in place after reviewing new memos; this is its change log</span></div><ul class="evt">${d.log
+  .slice()
+  .reverse()
+  .map((l) => `<li><time title="${when(l.ts)}">${when(l.ts).slice(5, 16)}</time><span><span class="kind">v${l.version}</span>${esc(l.note ?? "no note")}<span class="who">${Math.round(l.bytes / 1024)} KB</span></span></li>`)
+  .join("") || `<li class="empty">no changes recorded</li>`}</ul></div>`;
+  return shell(`${d.title} · Agent board`, body, null);
 }
 
 /** Result of the wake button (plain page so it works without JS). */

@@ -7,6 +7,8 @@ Wants=network-online.target
 User=agent
 Group=agent
 EnvironmentFile=/etc/agent-worker.env
+# optional per-worker settings, e.g. WORKER_GOALS=C (written by install.sh from WORKER_GOALS_<n> in agent-worker.env)
+EnvironmentFile=-/etc/agent-worker-%i.env
 Environment=WORKER_ID=%H-%i
 Environment=HOME=/home/agent
 # each worker has its own opencode data dir (sessions + SQLite) so concurrent workers never share a database

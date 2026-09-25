@@ -1,19 +1,20 @@
 #!/usr/bin/env node
 // Board worker: claims one task at a time from the board and runs it in a fresh `opencode run` session
 // (DeepSeek V4.1 Flash via OpenCode Go). State lives on the board; this process is disposable.
-// Env: BOARD_URL, WORKER_TOKEN, WORKER_ID, OPENCODE_MODEL, WORK_ROOT, TEMPLATES, POLL_S, HEARTBEAT_S
+// Env: BOARD_URL, WORKER_TOKEN, WORKER_ID, WORKER_GOALS (comma-separated goal ids to prefer), OPENCODE_MODEL, WORK_ROOT, TEMPLATES, POLL_S, HEARTBEAT_S
 import { spawn, execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, chmodSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, relative } from "node:path";
 import { createInterface } from "node:readline";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 const env = process.env;
 const BOARD_URL = (env.BOARD_URL ?? "").replace(/\/$/, "");
 const TOKEN = env.WORKER_TOKEN ?? "";
 const WORKER_ID = env.WORKER_ID ?? `${hostname()}-${process.argv[2] ?? "1"}`;
 const HOST = hostname();
+const GOALS = (env.WORKER_GOALS ?? "").split(",").map((s) => s.trim()).filter(Boolean); // preferred goals; the board falls back to any goal
 const MODEL = env.OPENCODE_MODEL ?? "opencode-go/deepseek-v4.1-flash";
 const WORK_ROOT = env.WORK_ROOT ?? "/srv/work";
 const TEMPLATES = env.TEMPLATES ?? "/srv/templates";
@@ -103,7 +104,7 @@ function prepareWorkspace(task, deps, previous) {
   const ws = join(WORK_ROOT, `${task.id}-a${task.attempt}`);
   rmSync(ws, { recursive: true, force: true });
   mkdirSync(ws, { recursive: true });
-  const wantTs = task.kind !== "py";
+  const wantTs = task.kind === "ts" || task.kind === "check" || task.kind === "other";
   const wantPy = task.kind === "py" || task.kind === "check";
   if (wantTs && existsSync(join(TEMPLATES, "ts"))) {
     cpSync(join(TEMPLATES, "ts"), ws, { recursive: true, filter: (src) => !src.includes("/node_modules") });
@@ -159,11 +160,19 @@ function taskMarkdown(task, reviews, depLines, seeded) {
     depLines.length ? `\n## Dependencies available in this workspace\n${depLines.join("\n")}` : "",
     ``,
     `## Rules for this workspace`,
-    `- Write EVERY deliverable file under \`out/\` (for example \`out/src/…\`, \`out/tests/…\`). Files outside \`out/\` are not collected.`,
-    `- Finish by writing \`out/REPORT.md\` with the sections: Summary, Files, How I tested, Known gaps.`,
-    `- Run tests only through \`./run-tests <command>\` (for example \`./run-tests npx vitest run\` or \`./run-tests .venv/bin/pytest -q\`); it serializes test runs on this small machine.`,
-    `- Tooling is already installed: Node 22 with typescript, vitest and tsx (node_modules is linked), Python 3 with pytest and hypothesis (.venv is linked). Do not install global packages. No network access is needed.`,
-    `- Keep it finished: a small, working, tested deliverable within the time budget beats a large unfinished one.`,
+    `- Write EVERY deliverable file under \`out/\` (for example \`out/src/…\`, \`out/tests/…\`, \`out/MEMO.md\`). Files outside \`out/\` are not collected.`,
+    `- Finish by writing \`out/REPORT.md\` with the sections: Summary, Files, ${task.kind === "doc" ? "Sources used" : "How I tested"}, Known gaps.`,
+    ...(task.kind === "doc"
+      ? [
+          `- This is a research and writing task, not a coding task: no tests, no code unless the spec asks for it. Read the URLs the spec lists with the webfetch tool (or \`curl -sL <url> | head -c 60000\`); the machine has internet access. Read at most the pages the spec names plus a few more you judge relevant; do not crawl.`,
+          `- Every fact, number or quote must come from a page you actually fetched (cite its URL next to it) or be labelled "from model knowledge, unverified". Never invent statistics, customer names, quotes or URLs.`,
+          `- Write for a busy founder: concrete, specific to DeepSpace, ranked, no filler. Respect the length limit in the spec.`
+        ]
+      : [
+          `- Run tests only through \`./run-tests <command>\` (for example \`./run-tests npx vitest run\` or \`./run-tests .venv/bin/pytest -q\`); it serializes test runs on this small machine.`,
+          `- Tooling is already installed: Node 22 with typescript, vitest and tsx (node_modules is linked), Python 3 with pytest and hypothesis (.venv is linked). Do not install global packages. No network access is needed.`
+        ]),
+    `- Keep it finished: a small, ${task.kind === "doc" ? "well-sourced" : "working, tested"} deliverable within the time budget beats a large unfinished one.`,
     `- Do not ask questions; make reasonable assumptions and state them in the report.`,
     ``
   ].join("\n");
@@ -302,7 +311,7 @@ async function runTask(claim) {
   current = { task, child };
 
   const hb = setInterval(async () => {
-    const r = await api("POST", "/worker/heartbeat", { worker_id: WORKER_ID, host: HOST, version: VERSION, task_id: task.id, note: `step ${steps}${lastTool ? ` · ${lastTool}` : ""}` });
+    const r = await api("POST", "/worker/heartbeat", { worker_id: WORKER_ID, host: HOST, version: VERSION, goals: GOALS, task_id: task.id, note: `step ${steps}${lastTool ? ` · ${lastTool}` : ""}` });
     if (r.status === 409) {
       leaseLost = true;
       log("lease lost; killing opencode");
@@ -454,10 +463,10 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
 mkdirSync(WORK_ROOT, { recursive: true });
-log(`worker ${VERSION} starting: board ${BOARD_URL}, model ${MODEL}`);
+log(`worker ${VERSION} starting: board ${BOARD_URL}, model ${MODEL}${GOALS.length ? `, prefers goals ${GOALS.join(",")}` : ""}`);
 let backoff = 30;
 while (!stopping) {
-  const r = await api("POST", "/worker/claim", { worker_id: WORKER_ID, host: HOST, version: VERSION });
+  const r = await api("POST", "/worker/claim", { worker_id: WORKER_ID, host: HOST, version: VERSION, goals: GOALS });
   if (!r.ok || !r.json) {
     log(`claim failed (${r.status}): ${(r.text ?? "").slice(0, 160)}; retry in ${backoff}s`);
     await sleep(backoff * 1000);

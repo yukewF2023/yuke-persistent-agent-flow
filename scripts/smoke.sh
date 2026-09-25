@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end smoke test of the board API (65 checks). Usage, from the repo root with `npm run dev` running: scripts/smoke.sh http://localhost:8787
+# End-to-end smoke test of the board API (76 checks). Usage, from the repo root with `npm run dev` running: scripts/smoke.sh http://localhost:8787
 # Reads ORCHESTRATOR_TOKEN / WORKER_TOKEN from .dev.vars. Safe to re-run (unique task keys per run); wipe .wrangler/state between runs for a clean board.
 # Written for bash 3.2: every response is captured with R=$(...) first (no nested quotes inside "$(...)").
 set -u
@@ -65,6 +65,15 @@ R=$(curl -s "${W[@]}" -X POST "$U/worker/tasks/$ID3/fail" -d '{"worker_id":"w3",
 R=$(curl -s "${W[@]}" -X POST "$U/worker/tasks/$ID2/submit" -d '{"worker_id":"w2","attempt":2,"report":"better","files":{"out/REPORT.md":"y"},"steps":4,"cost_usd":0.02}'); check "submit T/two attempt 2" '"status": "review"' "$R"
 R=$(curl -s "${M[@]}" -X POST "$U/manager/tasks/$ID2/review" -d '{"verdict":"reject","notes":"still no tests"}'); check "reject at max attempts → blocked" '"status": "blocked"' "$R"
 R=$(curl -s "${M[@]}" "$U/manager/needs-human"); check "needs-human populated" 'blocked after 2' "$R"
+printf '# Brief\n\n## Bottom line\n- first version\n\n| a | b |\n|---|---|\n| 1 | 2 |\n' > $T/doc.md
+python3 -c 'import json,sys;print(json.dumps({"body":open(sys.argv[1]).read(),"title":"Smoke brief","note":"first draft"}))' $T/doc.md > $T/doc.json
+R=$(curl -s "${M[@]}" -X PUT "$U/manager/docs/smoke-brief" -d @$T/doc.json); check "doc put" '"version": 1' "$R"
+R=$(curl -s "${M[@]}" -X PUT "$U/manager/docs/smoke-brief" -d @$T/doc.json); check "doc put again bumps version" '"version": 2' "$R"
+R=$(code -X PUT "${M[@]}" "$U/manager/docs/Bad_Id" -d @$T/doc.json); check "doc id validated" "400" "$R"
+R=$(curl -s "$U/api/docs"); check "docs index public" '"smoke-brief"' "$R"
+R=$(curl -s "$U/docs/smoke-brief"); check "doc page renders table" '<td>2</td>' "$R"
+R=$(curl -s "$U/docs/smoke-brief.md"); check "doc raw markdown" '## Bottom line' "$R"
+R=$(curl -s "$U/"); check "status page lists briefs" 'Smoke brief' "$R"
 R=$(curl -s "${M[@]}" -X PATCH "$U/manager/tasks/$ID2" -d '{"status":"ready","priority":3}'); check "patch blocked → ready bumps attempts" '"max_attempts": 3' "$R"
 R=$(curl -s "${M[@]}" -X PUT "$U/manager/pace" -d '{"usd_per_day":0.1}'); check "pace set" '"usd_per_day": 0.1' "$R"
 R=$(curl -s "${W[@]}" -X POST "$U/worker/claim" -d '{"worker_id":"w1"}'); check "claim paced (spent ≥ 0.1 today)" '"pacing": true' "$R"
@@ -85,6 +94,10 @@ R=$(curl -s "$U/"); check "status page html" '<h1>Agent board</h1>' "$R"; check 
 R=$(curl -s "$U/tasks/$ID1"); check "task page html" 'Acceptance criteria' "$R"
 R=$(code "$U/tasks/99999"); check "task 404 page" "404" "$R"
 R=$(curl -s "$U/api/tasks?status=accepted"); check "public list accepted" "T/one-$RUN" "$R"
+R=$(curl -s "${M[@]}" -X PUT "$U/manager/goals" -d '[{"id":"T","title":"Smoke goal","body":"test","min_ready":2},{"id":"R","title":"Research goal","body":"test","min_ready":1}]'); check "second goal upsert" '"upserted": 2' "$R"
+echo "[{\"goal_id\":\"R\",\"key\":\"R/memo-$RUN\",\"title\":\"memo\",\"kind\":\"doc\",\"spec\":\"write a memo\",\"acceptance\":\"- out/MEMO.md exists\",\"priority\":9}]" > $T/doc-task.json
+R=$(curl -s "${M[@]}" -X POST "$U/manager/tasks" -d @$T/doc-task.json); check "doc-kind task created" '"key": "R/memo-' "$R"
+R=$(curl -s "${W[@]}" -X POST "$U/worker/claim" -d '{"worker_id":"w9","goals":["R"]}'); check "worker preferring R claims the R task over higher-priority T tasks" "\"key\": \"R/memo-$RUN\"" "$R"; check "claim keeps the doc kind" '"kind": "doc"' "$R"
 R=$(curl -s "$U/goals"); check "goals editor renders GOALS.md" '## Goal A' "$R"
 R=$(code -X POST "$U/goals" -d 'token=wrong&content=x&sha=y'); check "goals save needs the board token" "401" "$R"
 R=$(code -X POST "$U/wake" -d 'token=wrong'); check "wake needs the board token" "401" "$R"
