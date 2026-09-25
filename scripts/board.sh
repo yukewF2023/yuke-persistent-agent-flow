@@ -143,6 +143,7 @@ PY
   memory-put)    python3 -c 'import json,sys;print(json.dumps({"memory":json.load(open(sys.argv[1]))}))' "${1:?memory.json}" > /tmp/board-memory.json; sendfile PUT /manager/memory /tmp/board-memory.json | j ;;
   pace)          if [ -n "${1:-}" ]; then send PUT /manager/pace "{\"usd_per_day\":$1}" | j; else get /manager/pace | j; fi ;;
   pace-mode)     send PUT /manager/pace-mode "{\"mode\":\"${1:?smooth|burst}\"}" | j ;;
+  pace-extra)    send PUT /manager/pace-extra "{\"usd\":${1:?usd for today only, 0 to clear}}" | j ;;
   docs)          get /manager/docs | python3 -c 'import json,sys,time;[print("%-24s v%-3d %6d bytes  %s  %s"%(d["id"],d["version"],d["bytes"],time.strftime("%m-%d %H:%MZ",time.gmtime(d["updated_at"]/1000)),d.get("note") or "")) for d in json.load(sys.stdin)]' ;;
   doc-get)       get "/manager/docs/${1:?doc id}" | python3 -c 'import json,sys;d=json.load(sys.stdin);sys.stdout.write(d["body"]) if "body" in d else print(json.dumps(d))' ;;
   doc-put)       python3 -c 'import json,sys;print(json.dumps({"body":open(sys.argv[1]).read(),"title":sys.argv[2],"note":sys.argv[3]}))' "${2:?markdown file}" "${3:-}" "${4:-}" > /tmp/board-doc.json; sendfile PUT "/manager/docs/${1:?doc id}" /tmp/board-doc.json | j ;;

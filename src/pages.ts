@@ -381,7 +381,7 @@ export function renderStatusPage(s: BoardStatus, now: number): string {
 <div class="tile ${c("review") > 10 ? "warn" : ""}"><div class="l">Review</div><div class="v">${c("review")}</div><div class="s">awaiting the manager</div></div>
 <div class="tile ok"><div class="l">Accepted</div><div class="v">${s.acceptedToday}<small>today</small></div><div class="s">${c("accepted")} in total</div></div>
 <div class="tile ${c("blocked") ? "bad" : ""}"><div class="l">Blocked</div><div class="v">${c("blocked")}</div><div class="s">${c("blocked") ? "need a human" : "none"}</div></div>
-<div class="tile ${sp.pacing ? "warn" : ""}"><div class="l">Spend today</div><div class="v">${usd(sp.todayUsd)}<small>/ ${usd(sp.paceUsdPerDay)}</small></div>${meter(sp.todayUsd, sp.paceUsdPerDay, 0.8, 1)}<div class="s">${sp.paceMode === "smooth" ? `${usd(sp.allowedNowUsd)} released so far` : "burst pace"}</div></div>
+<div class="tile ${sp.pacing ? "warn" : ""}"><div class="l">Spend today</div><div class="v">${usd(sp.todayUsd)}<small>/ ${usd(sp.paceUsdPerDay + sp.extraTodayUsd)}</small></div>${meter(sp.todayUsd, sp.paceUsdPerDay + sp.extraTodayUsd, 0.8, 1)}<div class="s">${sp.extraTodayUsd ? `+${usd(sp.extraTodayUsd)} extra today · ` : ""}${sp.paceMode === "smooth" ? `${usd(sp.allowedNowUsd)} released so far` : "burst pace"}</div></div>
 <div class="tile ${running ? "accent" : managerSilent ? "warn" : ""}"><div class="l">Manager</div><div class="v">${running ? "running" : s.manager.lastRunAt ? ago(s.manager.lastRunAt, now) : "never"}</div><div class="s">${running ? "reviewing and planning" : `next ${hhmm(next)} UTC`}</div></div>
 </div>`;
 
@@ -399,15 +399,20 @@ export function renderStatusPage(s: BoardStatus, now: number): string {
 <div class="legend">${stages.map(([label, n, cls]) => `<span><i class="${cls}" style="background:var(--${cls === "c-ready" ? "dim" : cls === "c-prog" ? "accent" : cls === "c-review" ? "warn" : cls === "c-acc" ? "ok" : cls === "c-blocked" ? "bad" : "line"})"></i>${label} <b>${n}</b></span>`).join("")}</div>`;
 
   // ---- goals table ----
+  const activeGoals = s.goals.filter((g) => g.status === "active");
+  const pausedGoals = s.goals.filter((g) => g.status !== "active");
+  const pausedRow = pausedGoals.length
+    ? `<tr><td colspan="8" class="muted small" style="padding-top:8px"><details><summary>${pausedGoals.length} ${pausedGoals.length === 1 ? "goal is" : "goals are"} ${pausedGoals.every((g) => g.status === "done") ? "done" : "paused"}: ${pausedGoals.map((g) => `${esc(g.id)} ${esc(g.title)} (${g.counts.accepted ?? 0} accepted)`).join("; ")}</summary><span>Their tasks stay on the board as history and are not handed out; set <code>- status: active</code> in GOALS.md to resume one.</span></details></td></tr>`
+    : "";
   const goalRows = s.goals.length
-    ? s.goals
+    ? activeGoals
         .map((g) => {
           const gc = (key: string) => g.counts[key] ?? 0;
           const acc = gc("accepted");
           const prog = g.catalog_size ? `<div class="kv" style="margin:0 0 4px"><b>${acc}</b> / ${g.catalog_size} catalog items</div>${meter(acc, g.catalog_size, 2, 2).replace('<i class=""', '<i class="ok"')}` : `<span class="muted">${acc} accepted · ${gc("ready") + gc("claimed") + gc("running") + gc("review")} open</span>`;
           return `<tr><td><span class="chip ${["A", "B", "X"].includes(g.id) ? g.id : "o"}">${esc(g.id)}</span>${esc(g.title)} ${statusPill(g.status)}</td><td class="prog">${prog}</td><td class="r">${gc("ready")}</td><td class="r">${gc("claimed") + gc("running")}</td><td class="r">${gc("review")}</td><td class="r">${gc("accepted")}</td><td class="r">${gc("blocked")}</td><td class="r">${gc("rejected") + gc("cancelled")}</td></tr>`;
         })
-        .join("")
+        .join("") + pausedRow
     : `<tr><td colspan="8" class="empty">no goals yet — the manager syncs GOALS.md on its next run</td></tr>`;
   const goalsTable = `<div class="scroll"><table class="tbl"><tr><th>goal</th><th>progress</th><th class="r">ready</th><th class="r">running</th><th class="r">review</th><th class="r">accepted</th><th class="r">blocked</th><th class="r" title="cancelled or rejected for good">dropped</th></tr>${goalRows}</table></div>`;
 
@@ -437,7 +442,7 @@ export function renderStatusPage(s: BoardStatus, now: number): string {
 
   const pipeline = `<section class="tab" id="pipeline"><h2 class="tabtitle">Pipeline</h2>
 <div class="cols">
-  <div class="panel"><div class="ph"><h2>Ready</h2><span class="r num">${c("ready")}</span></div>${taskList(s.ready.map((t) => taskRow(t, `p${t.priority} · ${ago(t.created_at, now).replace(" ago", "")}${t.deps && t.deps !== "[]" ? " · deps" : ""}`)), "nothing ready — the manager plans more on its next run")}${more(c("ready"), s.ready.length, "ready")}</div>
+  <div class="panel"><div class="ph"><h2>Ready</h2><span class="r num">${readyActive}</span></div>${taskList(s.ready.filter((t) => activeGoals.some((g) => g.id === t.goal_id)).map((t) => taskRow(t, `p${t.priority} · ${ago(t.created_at, now).replace(" ago", "")}${t.deps && t.deps !== "[]" ? " · deps" : ""}`)), "nothing ready — the manager plans more on its next run")}${more(readyActive, s.ready.filter((t) => activeGoals.some((g) => g.id === t.goal_id)).length, "ready")}${c("ready") > readyActive ? `<div class="more">${c("ready") - readyActive} more in paused goals, not handed out</div>` : ""}</div>
   <div class="panel"><div class="ph"><h2>In progress</h2><span class="r num">${inProgress}</span></div>${taskList(s.running.map((t) => taskRow(t, `${esc(workerName(t.worker_id ?? "?"))} · ${ago(t.claimed_at, now).replace(" ago", "")}`, s.progress[String(t.id)] ? liveLine(s.progress[String(t.id)], now, true) : `<span class="dim">${esc(t.status)} · attempt ${t.attempt}</span>`)), sp.pacing ? "nothing running · workers paused by the daily pace" : "nothing running")}</div>
   <div class="panel"><div class="ph"><h2>Review</h2><span class="r num">${c("review")}</span></div>${taskList(s.reviewQueue.map((t) => taskRow(t, `${ago(t.submitted_at, now).replace(" ago", "")} · attempt ${t.attempt}`)), "queue empty")}${more(c("review"), s.reviewQueue.length, "review")}</div>
   <div class="panel"><div class="ph"><h2>Accepted</h2><span class="r num">${c("accepted")}</span></div>${taskList(s.recentAccepted.map((t) => taskRow(t, `${ago(t.finished_at, now).replace(" ago", "")} · ${usd(t.cost_usd, 3)}${t.attempt > 1 ? ` · ${t.attempt} attempts` : ""}`)), "nothing accepted yet")}${more(c("accepted"), s.recentAccepted.length, "accepted")}</div>
@@ -461,7 +466,10 @@ ${s.goals
       .filter((l) => !/^- (status|min_ready|done-when):/.test(l))
       .join("\n")
       .trim();
-    return `<div class="panel"><div class="ph"><h2><span class="chip ${["A", "B", "X"].includes(g.id) ? g.id : "o"}">${esc(g.id)}</span>${esc(g.title)} ${statusPill(g.status)}</h2><span class="r">min ready ${g.min_ready}${g.catalog_size ? ` · catalog ${g.catalog_size}` : ""} · synced ${ago(g.updated_at, now)}</span></div>${g.done_when ? `<div class="kv"><span>done when <b>${esc(g.done_when)}</b></span></div>` : ""}<div class="md">${md(body) || `<p class="empty">empty body</p>`}</div></div>`;
+    const head = `<h2><span class="chip ${["A", "B", "X", "C", "D"].includes(g.id) ? g.id : "o"}">${esc(g.id)}</span>${esc(g.title)} ${statusPill(g.status)}</h2>`;
+    const meta = `min ready ${g.min_ready}${g.catalog_size ? ` · catalog ${g.catalog_size}` : ""} · synced ${ago(g.updated_at, now)}`;
+    if (g.status !== "active") return `<div class="panel"><details><summary style="cursor:pointer">${head}<span class="muted small">${meta} · ${g.counts.accepted ?? 0} accepted · body kept for reference</span></summary><div class="md" style="margin-top:10px">${md(body) || `<p class="empty">empty body</p>`}</div></details></div>`;
+    return `<div class="panel"><div class="ph">${head}<span class="r">${meta}</span></div>${g.done_when ? `<div class="kv"><span>done when <b>${esc(g.done_when)}</b></span></div>` : ""}<div class="md">${md(body) || `<p class="empty">empty body</p>`}</div></div>`;
   })
   .join("")}
 </section>`;
@@ -479,8 +487,8 @@ ${s.goals
   const budget = `<section class="tab" id="budget"><h2 class="tabtitle">Budget</h2>
 <div class="grid">
   <div class="panel"><div class="ph"><h2>OpenCode Go</h2><span class="r">DeepSeek V4.1 Flash · the workers' allowance</span></div>
-    ${bar("today", sp.todayUsd, sp.paceUsdPerDay)}${bar("5 h", sp.fiveHourUsd, 12)}${bar("week", sp.weekUsd, 30)}${bar("month", sp.monthUsd, 60)}
-    <div class="kv"><span>tasks today <b>${sp.todayTasks}</b></span><span>avg per task <b>${usd(sp.todayTasks ? sp.todayUsd / sp.todayTasks : 0, 3)}</b></span><span>in flight est. <b>${usd(sp.inflightEstimateUsd)}</b></span><span>daily pace <b>${usd(sp.paceUsdPerDay)}</b></span></div>
+    ${bar("today", sp.todayUsd, sp.paceUsdPerDay + sp.extraTodayUsd)}${bar("5 h", sp.fiveHourUsd, 12)}${bar("week", sp.weekUsd, 30)}${bar("month", sp.monthUsd, 60)}
+    <div class="kv"><span>tasks today <b>${sp.todayTasks}</b></span><span>avg per task <b>${usd(sp.todayTasks ? sp.todayUsd / sp.todayTasks : 0, 3)}</b></span><span>in flight est. <b>${usd(sp.inflightEstimateUsd)}</b></span><span>daily pace <b>${usd(sp.paceUsdPerDay)}</b></span>${sp.extraTodayUsd ? `<span>extra today <b>+${usd(sp.extraTodayUsd)}</b> (a one-day allowance; gone at 00:00 UTC)</span>` : ""}</div>
     ${sp.pacing ? `<span class="pill warn">paused</span> <span class="muted small">${esc(sp.pacing.reason)}</span>` : `<span class="pill ok">within pace</span>`}
     <p class="muted small" style="margin:10px 0 0">${sp.paceMode === "smooth" ? `Smooth pace: 20 % of the day's pace is released at 00:00 UTC and the rest hour by hour (${usd(sp.allowedNowUsd)} released so far), so the workers stay busy all day instead of spending everything in the first hours.` : "Burst pace: the whole day's pace is available from 00:00 UTC."} Claims also stop when a Go window (5 h $12, week $30, month $60) is at 90 %; the manager moves the pace between $0.50 and $2.50, and <code>scripts/board.sh pace-mode</code> switches the mode. Peak pricing ×2 on weekdays 01–04 and 06–10 UTC.</p>
   </div>

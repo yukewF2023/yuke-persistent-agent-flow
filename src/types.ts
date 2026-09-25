@@ -180,8 +180,10 @@ export interface SpendSummary {
   inflightEstimateUsd: number;
   /** "smooth": the daily pace is released hour by hour; "burst": all of it from 00:00 UTC */
   paceMode: "smooth" | "burst";
-  /** how much of today's pace is released right now (equals the pace in burst mode) */
+  /** how much of today's pace is released right now (equals the pace in burst mode), including any extra */
   allowedNowUsd: number;
+  /** a one-day allowance a human added on top of the pace (scripts/board.sh pace-extra); released at once, gone at 00:00 UTC */
+  extraTodayUsd: number;
   pacing: { reason: string; retryAfterS: number } | null;
   /** the last 7 UTC days, today first */
   days: { day: string; usd: number; tasks: number }[];

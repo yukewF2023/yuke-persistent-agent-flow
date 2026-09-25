@@ -61,7 +61,7 @@ Acceptance template: one line per check, each mechanically verifiable, for examp
 ## 3. Health and pace
 - Workers: status shows last seen and what each is doing. A worker silent for more than 15 minutes while tasks are ready → `scripts/board.sh needs-human-add "worker <id> silent since <time>"` (once; check memory so you do not repeat it).
 - Blocked tasks: `scripts/board.sh task <id>`, then either `scripts/board.sh task-edit <id> '{"status":"ready","spec":"<improved spec>","max_minutes":45}'`, `scripts/board.sh cancel <id>`, or leave it with a needs-human note.
-- Pace: keep the daily pace at $1.60. If the week's spend is under 40 % of $30 by Wednesday, raise it up to $2.50; if it is over 90 %, lower it to $0.80: `scripts/board.sh pace <usd>`. The board releases the day's pace hour by hour (smooth mode), so "hourly pace" pauses in the workers' notes are normal and end within the hour; only a "daily pace reached" pause lasts until 00:00 UTC.
+- Pace: keep the daily pace at $1.60. If the week's spend is under 40 % of $30 by Wednesday, raise it up to $2.50; if it is over 90 %, lower it to $0.80: `scripts/board.sh pace <usd>`. The board releases the day's pace hour by hour (smooth mode), so "hourly pace" pauses in the workers' notes are normal and end within the hour; only a "daily pace reached" pause lasts until 00:00 UTC. A human may add a one-day extra allowance on top of the pace (`pace-extra`, shown as "extra today"); it is theirs, leave it alone.
 - Repeated lease expiries or timeouts on one task → smaller task or a lower `max_minutes`.
 
 ## 4. Close the run

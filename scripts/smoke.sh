@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end smoke test of the board API (76 checks). Usage, from the repo root with `npm run dev` running: scripts/smoke.sh http://localhost:8787
+# End-to-end smoke test of the board API (78 checks). Usage, from the repo root with `npm run dev` running: scripts/smoke.sh http://localhost:8787
 # Reads ORCHESTRATOR_TOKEN / WORKER_TOKEN from .dev.vars. Safe to re-run (unique task keys per run); wipe .wrangler/state between runs for a clean board.
 # Written for bash 3.2: every response is captured with R=$(...) first (no nested quotes inside "$(...)").
 set -u
@@ -78,6 +78,8 @@ R=$(curl -s "${M[@]}" -X PATCH "$U/manager/tasks/$ID2" -d '{"status":"ready","pr
 R=$(curl -s "${M[@]}" -X PUT "$U/manager/pace" -d '{"usd_per_day":0.1}'); check "pace set" '"usd_per_day": 0.1' "$R"
 R=$(curl -s "${W[@]}" -X POST "$U/worker/claim" -d '{"worker_id":"w1"}'); check "claim paced (spent ≥ 0.1 today)" '"pacing": true' "$R"
 R=$(curl -s "${M[@]}" -X PUT "$U/manager/pace" -d '{"usd_per_day":1.6}'); check "pace reset" '"usd_per_day": 1.6' "$R"
+R=$(curl -s "${M[@]}" -X PUT "$U/manager/pace-extra" -d '{"usd":2}'); check "extra allowance for today" '"extraTodayUsd": 2' "$R"
+R=$(curl -s "${M[@]}" -X PUT "$U/manager/pace-extra" -d '{"usd":0}'); check "extra allowance cleared" '"extraTodayUsd": 0' "$R"
 python3 -c "import json;print(json.dumps({'worker_id':'w3','report':'big','files':{'out/big.txt':'x'*900000}}))" > $T/big.json
 R=$(curl -s "${W[@]}" -X POST "$U/worker/claim" -d '{"worker_id":"w3"}'); check "w3 re-claims T/three" "\"key\": \"T/three-$RUN\"" "$R"
 R=$(code "${W[@]}" -X POST "$U/worker/tasks/$ID3/submit" -d @$T/big.json); check "files too large → 413" "413" "$R"

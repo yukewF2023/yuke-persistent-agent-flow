@@ -327,20 +327,22 @@ export class Board extends DurableObject<Env> {
     const fiveHourUsd = Number(this.one<{ s: number }>("SELECT COALESCE(SUM(usd), 0) AS s FROM spend WHERE ts >= ?", now - 5 * 3600_000)?.s ?? 0);
     const pace = Number(this.kvGet("pace_usd_per_day") ?? DEFAULT_PACE_USD_PER_DAY);
     const paceMode: SpendSummary["paceMode"] = this.kvGet("pace_mode") === "burst" ? "burst" : "smooth";
+    const extraTodayUsd = Math.max(0, Number(this.kvGet(`pace_extra:${this.today(now)}`) ?? 0));
+    const dayCap = pace + extraTodayUsd;
     const inflight = Number(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM tasks WHERE status IN ('claimed','running')")?.n ?? 0);
     const avg = Number(this.one<{ a: number | null }>("SELECT AVG(usd) AS a FROM (SELECT usd FROM spend ORDER BY id DESC LIMIT 10)")?.a ?? 0) || DEFAULT_TASK_COST_USD;
     const inflightEstimateUsd = inflight * avg;
     // Smooth mode releases the daily pace hour by hour (20 % at once, then 1/24 per hour) so the workers stay busy all day
     // instead of spending everything in the first hours after 00:00 UTC.
     const hourFrac = (now - utcDayStart(now)) / 86_400_000;
-    const allowedNowUsd = paceMode === "burst" ? pace : pace * Math.min(1, Math.max(0.2, hourFrac + 1 / 24));
+    const allowedNowUsd = (paceMode === "burst" ? pace : pace * Math.min(1, Math.max(0.2, hourFrac + 1 / 24))) + extraTodayUsd;
     let pacing: SpendSummary["pacing"] = null;
     if (fiveHourUsd >= 0.9 * GO_CAPS.fiveHour) pacing = { reason: `Go 5-hour window at 90% ($${fiveHourUsd.toFixed(2)} of $${GO_CAPS.fiveHour})`, retryAfterS: 900 };
     else if (weekUsd >= 0.9 * GO_CAPS.week) pacing = { reason: `Go weekly window at 90% ($${weekUsd.toFixed(2)} of $${GO_CAPS.week})`, retryAfterS: 3600 };
     else if (monthUsd >= 0.9 * GO_CAPS.month) pacing = { reason: `Go monthly window at 90% ($${monthUsd.toFixed(2)} of $${GO_CAPS.month})`, retryAfterS: 3600 };
-    else if (todayUsd + inflightEstimateUsd >= pace) pacing = { reason: `daily pace $${pace.toFixed(2)} reached ($${todayUsd.toFixed(2)} spent + $${inflightEstimateUsd.toFixed(2)} in flight); resumes 00:00 UTC`, retryAfterS: Math.min(900, secondsToUtcMidnight(now)) };
+    else if (todayUsd + inflightEstimateUsd >= dayCap) pacing = { reason: `daily pace $${pace.toFixed(2)}${extraTodayUsd ? ` + $${extraTodayUsd.toFixed(2)} extra` : ""} reached ($${todayUsd.toFixed(2)} spent + $${inflightEstimateUsd.toFixed(2)} in flight); resumes 00:00 UTC`, retryAfterS: Math.min(900, secondsToUtcMidnight(now)) };
     else if (todayUsd + inflightEstimateUsd >= allowedNowUsd) pacing = { reason: `hourly pace: $${allowedNowUsd.toFixed(2)} of today's $${pace.toFixed(2)} released so far ($${todayUsd.toFixed(2)} spent + $${inflightEstimateUsd.toFixed(2)} in flight); more every hour`, retryAfterS: 600 };
-    return { todayUsd, fiveHourUsd, weekUsd, monthUsd, todayTasks, paceUsdPerDay: pace, inflightEstimateUsd, paceMode, allowedNowUsd, pacing, days };
+    return { todayUsd, fiveHourUsd, weekUsd, monthUsd, todayTasks, paceUsdPerDay: pace, inflightEstimateUsd, paceMode, allowedNowUsd, extraTodayUsd, pacing, days };
   }
 
   /** Return expired claimed/running tasks to `ready` (lazy; called from claim and status). */
@@ -683,6 +685,16 @@ export class Board extends DurableObject<Env> {
       return json({ ok: true, bytes: text.length });
     }
     if (p[0] === "pace" && m === "GET") return json({ usd_per_day: Number(this.kvGet("pace_usd_per_day") ?? DEFAULT_PACE_USD_PER_DAY), mode: this.kvGet("pace_mode") === "burst" ? "burst" : "smooth", spend: this.spendSummary(now) });
+    if (p[0] === "pace-extra" && m === "PUT") {
+      // a human's one-day allowance on top of the pace: released immediately, forgotten at 00:00 UTC, never touched by the manager
+      const body = await readJson<{ usd?: unknown }>(request);
+      const v = num(body.usd);
+      if (!(v >= 0 && v <= 20)) return json({ error: "usd must be between 0 and 20" }, 400);
+      this.kvSet(`pace_extra:${this.today(now)}`, v ? String(v) : null);
+      this.event("human", "pace.set", null, `extra allowance for ${this.today(now)} set to $${v.toFixed(2)} (on top of the daily pace)`);
+      this.touch();
+      return json({ ok: true, extra_today_usd: v, day: this.today(now), spend: this.spendSummary(now) });
+    }
     if (p[0] === "pace-mode" && m === "PUT") {
       const body = await readJson<{ mode?: unknown }>(request);
       const mode = body.mode === "burst" ? "burst" : body.mode === "smooth" ? "smooth" : null;
