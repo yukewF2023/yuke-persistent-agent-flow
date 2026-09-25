@@ -371,11 +371,12 @@ export function renderStatusPage(s: BoardStatus, now: number): string {
   const running = Boolean(s.manager.lockedUntil);
   const managerSilent = !running && (!s.manager.lastRunAt || now - s.manager.lastRunAt > 90 * 60_000);
   const next = nextRunAt(now);
+  const readyActive = s.goals.filter((g) => g.status === "active").reduce((a, g) => a + (g.counts.ready ?? 0), 0);
 
   // ---- status strip ----
   const strip = `<div class="strip">
 <div class="tile ${offline ? "bad" : busy ? "ok" : paused ? "warn" : ""}"><div class="l">Workers</div><div class="v">${s.workers.length}</div><div class="s">${offline ? `${offline} offline` : busy ? `${busy} running` : paused ? "paused (pace)" : "idle"}</div></div>
-<div class="tile"><div class="l">Ready</div><div class="v">${c("ready")}</div><div class="s">queued for workers</div></div>
+<div class="tile"><div class="l">Ready</div><div class="v">${readyActive}</div><div class="s">${c("ready") > readyActive ? `queued · ${c("ready") - readyActive} more in paused goals` : "queued for workers"}</div></div>
 <div class="tile ${inProgress ? "accent" : ""}"><div class="l">In progress</div><div class="v">${inProgress}</div><div class="s">${inProgress ? "sessions running" : "nothing running"}</div></div>
 <div class="tile ${c("review") > 10 ? "warn" : ""}"><div class="l">Review</div><div class="v">${c("review")}</div><div class="s">awaiting the manager</div></div>
 <div class="tile ok"><div class="l">Accepted</div><div class="v">${s.acceptedToday}<small>today</small></div><div class="s">${c("accepted")} in total</div></div>
@@ -410,7 +411,7 @@ export function renderStatusPage(s: BoardStatus, now: number): string {
     : `<tr><td colspan="8" class="empty">no goals yet — the manager syncs GOALS.md on its next run</td></tr>`;
   const goalsTable = `<div class="scroll"><table class="tbl"><tr><th>goal</th><th>progress</th><th class="r">ready</th><th class="r">running</th><th class="r">review</th><th class="r">accepted</th><th class="r">blocked</th><th class="r" title="cancelled or rejected for good">dropped</th></tr>${goalRows}</table></div>`;
 
-  const nav = `<nav class="tabs"><a href="#overview">Overview</a><a href="#pipeline">Pipeline<span class="n">${c("ready")} · ${inProgress} · ${c("review")}</span></a><a href="#agents">Agents<span class="n">${s.workers.length + 1}</span></a><a href="#goals">Goals<span class="n">${s.goals.length}</span></a><a href="#activity">Activity</a><a href="#budget">Budget<span class="n">${usd(sp.todayUsd)}</span></a></nav>`;
+  const nav = `<nav class="tabs"><a href="#overview">Overview</a><a href="#pipeline">Pipeline<span class="n">${readyActive} · ${inProgress} · ${c("review")}</span></a><a href="#agents">Agents<span class="n">${s.workers.length + 1}</span></a><a href="#goals">Goals<span class="n">${s.goals.length}</span></a><a href="#activity">Activity</a><a href="#budget">Budget<span class="n">${usd(sp.todayUsd)}</span></a></nav>`;
 
   const overview = `<section class="tab" id="overview"><h2 class="tabtitle">Overview</h2>
 <div class="panel"><div class="ph"><h2>Pipeline</h2><span class="r">${c("accepted") + inProgress + c("review") + c("ready") + c("blocked") + dropped} tasks · <a href="#pipeline">open the board</a></span></div>${pipe}</div>
