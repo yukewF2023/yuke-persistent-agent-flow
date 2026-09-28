@@ -416,20 +416,22 @@ export function renderStatusPage(s: BoardStatus, now: number): string {
     : `<tr><td colspan="8" class="empty">no goals yet — the manager syncs GOALS.md on its next run</td></tr>`;
   const goalsTable = `<div class="scroll"><table class="tbl"><tr><th>goal</th><th>progress</th><th class="r">ready</th><th class="r">running</th><th class="r">review</th><th class="r">accepted</th><th class="r">blocked</th><th class="r" title="cancelled or rejected for good">dropped</th></tr>${goalRows}</table></div>`;
 
-  const nav = `<nav class="tabs"><a href="#overview">Overview</a><a href="#pipeline">Pipeline<span class="n">${readyActive} · ${inProgress} · ${c("review")}</span></a><a href="#agents">Agents<span class="n">${s.workers.length + 1}</span></a><a href="#goals">Goals<span class="n">${s.goals.length}</span></a><a href="#activity">Activity</a><a href="#budget">Budget<span class="n">${usd(sp.todayUsd)}</span></a></nav>`;
+  const nav = `<nav class="tabs"><a href="#overview">Overview</a><a href="#briefs">Briefs<span class="n">${s.docs.length}</span></a><a href="#pipeline">Pipeline<span class="n">${readyActive} · ${inProgress} · ${c("review")}</span></a><a href="#agents">Agents<span class="n">${s.workers.length + 1}</span></a><a href="#goals">Goals<span class="n">${s.goals.length}</span></a><a href="#activity">Activity</a><a href="#budget">Budget<span class="n">${usd(sp.todayUsd)}</span></a></nav>`;
 
+  const docList = (full: boolean) =>
+    s.docs.length
+      ? `<ul class="docs">${s.docs
+          .map((d) => `<li><a class="t" href="/docs/${esc(d.id)}">${esc(d.title)}</a><span class="s">${d.note ? esc(d.note) : "no change note"}</span><span class="m">v${d.version} · ${ago(d.updated_at, now)}${full ? ` · ${Math.round(d.bytes / 1024)} KB · <a href="/docs/${esc(d.id)}.md">markdown</a>` : ""}</span></li>`)
+          .join("")}</ul>`
+      : `<div class="empty">no briefs yet — the manager writes one per research goal once it has reviewed the first memos</div>`;
   const overview = `<section class="tab" id="overview"><h2 class="tabtitle">Overview</h2>
 <div class="panel"><div class="ph"><h2>Pipeline</h2><span class="r">${c("accepted") + inProgress + c("review") + c("ready") + c("blocked") + dropped} tasks · <a href="#pipeline">open the board</a></span></div>${pipe}</div>
+<div class="panel"><div class="ph"><h2>Briefs for you</h2><span class="r">maintained by the manager, rewritten in place · <a href="#briefs">all briefs</a></span></div>${docList(false)}</div>
 <div class="two">
   <div class="panel"><div class="ph"><h2>Agents</h2><span class="r">live · <a href="#agents">details</a></span></div><div id="agents-live">${renderAgents(s, now)}</div><div style="margin-top:10px">${managerCard(s, now)}</div></div>
   <div class="panel"><div class="ph"><h2>Needs attention</h2><span class="r">${s.needsHuman.length + s.blocked.length ? `${s.needsHuman.length + s.blocked.length} item${s.needsHuman.length + s.blocked.length === 1 ? "" : "s"}` : "all clear"}</span></div>${attention(s, now)}
   <h3>Recent activity</h3><ul class="evt">${s.events.slice(0, 8).map(eventLi).join("") || `<li class="empty">nothing yet</li>`}</ul><div class="more"><a href="#activity">full activity log</a></div></div>
 </div>
-<div class="panel"><div class="ph"><h2>Briefs for you</h2><span class="r">maintained by the manager · rewritten, never appended</span></div>${
-  s.docs.length
-    ? `<ul class="docs">${s.docs.map((d) => `<li><a class="t" href="/docs/${esc(d.id)}">${esc(d.title)}</a><span class="s">${d.note ? esc(d.note) : "no change note"}</span><span class="m">v${d.version} · ${ago(d.updated_at, now)} · ${Math.round(d.bytes / 1024)} KB</span></li>`).join("")}</ul>`
-    : `<div class="empty">no briefs yet — the manager writes one per research goal once it has reviewed the first memos</div>`
-}</div>
 <div class="panel"><div class="ph"><h2>Goals</h2><span class="r"><a href="#goals">bodies</a> · <a href="/goals">edit</a></span></div>${goalsTable}</div>
 <details class="help"><summary>How this board works, and where to look</summary><ul>
 <li><b>The loop.</b> You write goals in GOALS.md (the <a href="/goals">editor</a> commits it). The manager, a scheduled Claude routine, turns them into tasks with acceptance criteria, keeps the queue stocked, and reviews every deliverable by running its tests: accept, send back with notes, or split. Two DeepSeek workers on a small VM pull tasks continuously, paced by the OpenCode Go allowance. Sessions are disposable; this board is the memory.</li>
@@ -438,6 +440,13 @@ export function renderStatusPage(s: BoardStatus, now: number): string {
 <li><b>Manager runs</b> are full session transcripts on claude.ai: <a href="${ROUTINE_13}" rel="noopener">:13</a> and <a href="${ROUTINE_43}" rel="noopener">:43</a> (owner login). Every push to <code>main</code> also starts a run within about a minute; the Wake button does the same once its trigger is configured (manager/ROUTINE.md).</li>
 <li><b>Worker transcripts</b>: the opencode web UI on the VM through an SSH tunnel (worker/README.md), or a transcript link on the task page when session sharing is on.</li>
 <li>The page reloads every 60 s and keeps the tab in the URL hash, so <code>/#agents</code> is a bookmark. Machine-readable: <a href="/api/status">/api/status</a>, <a href="/api/live">/api/live</a>. Source: <a href="${REPO}" rel="noopener">GitHub</a>.</li></ul></details>
+</section>`;
+
+  const docEvents = s.events.filter((e) => e.kind === "doc.update").slice(0, 12);
+  const briefs = `<section class="tab" id="briefs"><h2 class="tabtitle">Briefs</h2>
+<div class="panel"><div class="ph"><h2>Briefs for you</h2><span class="r">${s.docs.length} document${s.docs.length === 1 ? "" : "s"} · the manager's output for the CEO</span></div>${docList(true)}
+<p class="muted small" style="margin:10px 0 0">Each research goal has a <b>brief</b> (bottom line, ranked recommendations, what we know, competitor table, open questions, sources) and an <b>idea bank</b> (ideas ranked by how many independent sessions raised them). After every run that accepted memos, the manager rewrites the document in place, under a length cap, so it stays current instead of growing; the page for each one shows its version log.</p></div>
+<div class="panel"><div class="ph"><h2>Recent rewrites</h2><span class="r">from the activity log</span></div><ul class="evt">${docEvents.length ? docEvents.map(eventLi).join("") : `<li class="empty">no rewrites yet</li>`}</ul></div>
 </section>`;
 
   const pipeline = `<section class="tab" id="pipeline"><h2 class="tabtitle">Pipeline</h2>
@@ -506,10 +515,11 @@ ${s.goals
 
   const body = `
 <header class="hdr"><div><h1>Agent board</h1><div class="sub">Claude manager · two DeepSeek V4.1 Flash workers on opencode · Cloudflare</div></div>
-<div class="hdr-r"><span><span class="dot ${busy ? "pulse" : "idle"}"></span> updated <span id="updated">just now</span></span><a href="/api/status">JSON</a><button class="mini" id="theme" type="button" title="theme: system / light / dark">theme</button></div></header>
+<div class="hdr-r"><span><span class="dot ${busy ? "pulse" : "idle"}"></span> updated <span id="updated">just now</span></span><a href="#briefs"><b>Briefs</b>${s.docs.length ? ` (${s.docs.length})` : ""}</a><a href="/api/status">JSON</a><button class="mini" id="theme" type="button" title="theme: system / light / dark">theme</button></div></header>
 ${strip}
 ${nav}
 ${overview}
+${briefs}
 ${pipeline}
 ${agents}
 ${goalsTab}
@@ -602,9 +612,10 @@ ${banner}${setup}
 }
 
 /** /docs/<id> — a manager-maintained brief, rendered from markdown, with its change log. */
-export function renderDocPage(d: DocRow, now: number): string {
+export function renderDocPage(d: DocRow, now: number, others: { id: string; title: string }[] = []): string {
+  const siblings = others.filter((o) => o.id !== d.id);
   const body = `
-<header class="hdr"><div><div class="sub"><a href="/">← board</a> · brief</div><h1>${esc(d.title)}</h1><div class="sub">version ${d.version} · updated ${ago(d.updated_at, now)} (${when(d.updated_at)}) · ${Math.round(d.bytes / 1024)} KB${d.note ? ` · ${esc(d.note)}` : ""}</div></div><div class="hdr-r"><a href="/docs/${esc(d.id)}.md">markdown</a><a href="/api/docs/${esc(d.id)}">JSON</a></div></header>
+<header class="hdr"><div><div class="sub"><a href="/">← board</a> · <a href="/#briefs">briefs</a>${siblings.length ? ` · ${siblings.map((o) => `<a href="/docs/${esc(o.id)}">${esc(o.title.replace(/^DeepSpace /, ""))}</a>`).join(" · ")}` : ""}</div><h1>${esc(d.title)}</h1><div class="sub">version ${d.version} · updated ${ago(d.updated_at, now)} (${when(d.updated_at)}) · ${Math.round(d.bytes / 1024)} KB${d.note ? ` · ${esc(d.note)}` : ""}</div></div><div class="hdr-r"><a href="/docs/${esc(d.id)}.md">markdown</a><a href="/api/docs/${esc(d.id)}">JSON</a></div></header>
 <div class="panel doc"><div class="md">${md(d.body)}</div></div>
 <div class="panel"><div class="ph"><h2>Changes</h2><span class="r">the manager rewrites this brief in place after reviewing new memos; this is its change log</span></div><ul class="evt">${d.log
   .slice()

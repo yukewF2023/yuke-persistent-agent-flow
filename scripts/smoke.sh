@@ -100,7 +100,7 @@ R=$(curl -s "${M[@]}" -X PUT "$U/manager/goals" -d '[{"id":"T","title":"Smoke go
 echo "[{\"goal_id\":\"R\",\"key\":\"R/memo-$RUN\",\"title\":\"memo\",\"kind\":\"doc\",\"spec\":\"write a memo\",\"acceptance\":\"- out/MEMO.md exists\",\"priority\":9}]" > $T/doc-task.json
 R=$(curl -s "${M[@]}" -X POST "$U/manager/tasks" -d @$T/doc-task.json); check "doc-kind task created" '"key": "R/memo-' "$R"
 R=$(curl -s "${W[@]}" -X POST "$U/worker/claim" -d '{"worker_id":"w9","goals":["R"]}'); check "worker preferring R claims the R task over higher-priority T tasks" "\"key\": \"R/memo-$RUN\"" "$R"; check "claim keeps the doc kind" '"kind": "doc"' "$R"
-R=$(curl -s "$U/goals"); check "goals editor renders GOALS.md" '## Goal A' "$R"
+R=$(curl -s "$U/goals"); check "goals editor renders GOALS.md" '## Goal C' "$R"
 R=$(code -X POST "$U/goals" -d 'token=wrong&content=x&sha=y'); check "goals save needs the board token" "401" "$R"
 R=$(code -X POST "$U/wake" -d 'token=wrong'); check "wake needs the board token" "401" "$R"
 R=$(curl -s "${M[@]}" -X POST "$U/manager/wake" -d '{"reason":"smoke"}'); check "wake via CLI records the request" '"message"' "$R"

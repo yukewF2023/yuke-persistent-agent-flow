@@ -160,7 +160,8 @@ export default {
         if (r.error) return html(renderUnavailable(r.error), 503);
         const doc = r.body as DocRow;
         if (raw) return new Response(doc.body, { headers: { "content-type": "text/markdown; charset=utf-8", "cache-control": "no-store" } });
-        return html(renderDocPage(doc, Date.now()));
+        const idx = await internal("/api/docs");
+        return html(renderDocPage(doc, Date.now(), Array.isArray(idx.body) ? (idx.body as { id: string; title: string }[]) : []));
       }
       if (role === "public" && parts[0] === "tasks" && parts[1]) {
         const r = await internal(`/api/tasks/${encodeURIComponent(parts[1])}`);
