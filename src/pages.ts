@@ -28,7 +28,7 @@ nav.tabs{display:flex;gap:2px;margin:0 0 14px;border-bottom:1px solid var(--line
 .pipe{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--panel2);border:1px solid var(--line)}.pipe a{display:block;height:100%}.pipe .c-ready{background:var(--dim)}.pipe .c-prog{background:var(--accent)}.pipe .c-review{background:var(--warn)}.pipe .c-acc{background:var(--ok)}.pipe .c-blocked{background:var(--bad)}.pipe .c-dropped{background:var(--line)}
 .legend{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:8px;font-size:12.5px;color:var(--muted)}.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:-1px}.legend b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}.legend a{color:inherit}
 .pill{display:inline-block;font-size:11.5px;line-height:1.6;padding:0 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap;vertical-align:middle}.pill.ok{color:var(--ok);border-color:var(--ok)}.pill.bad{color:var(--bad);border-color:var(--bad)}.pill.warn{color:var(--warn);border-color:var(--warn)}.pill.accent{color:var(--accent);border-color:var(--accent)}
-.chip{display:inline-block;font:10.5px/1.7 var(--mono);padding:0 5px;border-radius:4px;color:#fff;vertical-align:1px;margin-right:6px;min-width:16px;text-align:center}.chip.A{background:#3b6fd6}.chip.B{background:#2c9a6a}.chip.X{background:#8a5cc7}.chip.C{background:#d1652b}.chip.D{background:#c2417a}.chip.o{background:var(--dim)}
+.chip{display:inline-block;font:10.5px/1.7 var(--mono);padding:0 5px;border-radius:4px;color:#fff;vertical-align:1px;margin-right:6px;min-width:16px;text-align:center}.chip.A{background:#3b6fd6}.chip.B{background:#2c9a6a}.chip.X{background:#8a5cc7}.chip.C{background:#d1652b}.chip.D{background:#c2417a}.chip.E{background:#1f8a8a}.chip.o{background:var(--dim)}
 .docs{list-style:none;margin:0;padding:0}.docs li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:8px 0;border-bottom:1px solid var(--line);align-items:baseline}.docs li:last-child{border-bottom:0}.docs .t{font-weight:500}.docs .s{grid-column:1;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.docs .m{grid-column:2;grid-row:1/3;font-size:12px;color:var(--muted);white-space:nowrap;text-align:right}
 .doc{max-width:860px}.doc .md h4{font-size:17px;margin:22px 0 8px}.doc .md h5{font-size:14.5px;margin:16px 0 6px}.doc .md p,.doc .md li{font-size:14px}.doc .md table{border-collapse:collapse;font-size:13px;margin:8px 0}.doc .md td,.doc .md th{border:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top}
 .tasks{list-style:none;margin:0;padding:0}.tasks li{border-bottom:1px solid var(--line)}.tasks li:last-child{border-bottom:0}.task{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:1px 10px;align-items:baseline;padding:7px 0;color:var(--fg)}.task:hover{text-decoration:none}.task:hover .t{color:var(--accent)}.task .t{grid-column:1/3;font-weight:500;line-height:1.35;overflow-wrap:anywhere}.task .k{grid-column:1;font:11.5px var(--mono);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task .m{grid-column:2;font-size:11.5px;color:var(--muted);text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.task .live{grid-column:1/3;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -107,11 +107,11 @@ const statusPill = (s: string) => {
   const cls = s === "accepted" ? "ok" : s === "blocked" || s === "rejected" ? "bad" : s === "review" ? "warn" : s === "running" || s === "claimed" ? "accent" : "";
   return `<span class="pill ${cls}">${esc(s)}</span>`;
 };
-const CHIP_TITLE: Record<string, string> = { A: "Goal A · TypeScript module", B: "Goal B · Python port", X: "Goal B · cross-check (TS vs Python)", C: "Goal C · B2B go-to-market", D: "Goal D · B2C growth" };
+const CHIP_TITLE: Record<string, string> = { A: "Goal A · TypeScript module", B: "Goal B · Python port", X: "Goal B · cross-check (TS vs Python)", C: "Goal C · B2B go-to-market", D: "Goal D · B2C growth", E: "Goal E · B2B outreach" };
 /** Goal chip from the task key prefix (A/…, B/…, X/…) or the goal id. */
 const chip = (key: string, goalId?: string | null) => {
   const p = /^([A-Za-z0-9]+)\//.exec(key)?.[1] ?? goalId ?? "";
-  const cls = ["A", "B", "X", "C", "D"].includes(p) ? p : "o";
+  const cls = ["A", "B", "X", "C", "D", "E"].includes(p) ? p : "o";
   return `<span class="chip ${cls}" title="${esc(CHIP_TITLE[p] ?? `goal ${goalId ?? p}`)}">${esc(p || "·")}</span>`;
 };
 const k = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
@@ -321,7 +321,7 @@ export function renderAgents(s: Pick<LiveStatus, "workers" | "running" | "progre
       let prefers = "";
       try {
         const g = w.goals ? (JSON.parse(w.goals) as string[]) : [];
-        if (g.length) prefers = ` · prefers ${g.map((x) => `<span class="chip ${["A", "B", "X", "C", "D"].includes(x) ? x : "o"}" title="${esc(CHIP_TITLE[x] ?? `goal ${x}`)}">${esc(x)}</span>`).join("")}`;
+        if (g.length) prefers = ` · prefers ${g.map((x) => `<span class="chip ${["A", "B", "X", "C", "D", "E"].includes(x) ? x : "o"}" title="${esc(CHIP_TITLE[x] ?? `goal ${x}`)}">${esc(x)}</span>`).join("")}`;
       } catch {}
       return `<div class="agent"><div class="ah"><span class="dot ${dot}"></span><b>${esc(workerName(w.id))}</b><span class="model">DeepSeek V4.1 Flash · opencode${w.host ? ` · ${esc(w.host)}` : ""}${prefers}</span><span class="pill ${state[0]}">${state[1]}</span></div><div class="now">${nowLine}</div>${budget}${stats}${feed}</div>`;
     })
@@ -475,7 +475,7 @@ ${s.goals
       .filter((l) => !/^- (status|min_ready|done-when):/.test(l))
       .join("\n")
       .trim();
-    const head = `<h2><span class="chip ${["A", "B", "X", "C", "D"].includes(g.id) ? g.id : "o"}">${esc(g.id)}</span>${esc(g.title)} ${statusPill(g.status)}</h2>`;
+    const head = `<h2><span class="chip ${["A", "B", "X", "C", "D", "E"].includes(g.id) ? g.id : "o"}">${esc(g.id)}</span>${esc(g.title)} ${statusPill(g.status)}</h2>`;
     const meta = `min ready ${g.min_ready}${g.catalog_size ? ` · catalog ${g.catalog_size}` : ""} · synced ${ago(g.updated_at, now)}`;
     if (g.status !== "active") return `<div class="panel"><details><summary style="cursor:pointer">${head}<span class="muted small">${meta} · ${g.counts.accepted ?? 0} accepted · body kept for reference</span></summary><div class="md" style="margin-top:10px">${md(body) || `<p class="empty">empty body</p>`}</div></details></div>`;
     return `<div class="panel"><div class="ph">${head}<span class="r">${meta}</span></div>${g.done_when ? `<div class="kv"><span>done when <b>${esc(g.done_when)}</b></span></div>` : ""}<div class="md">${md(body) || `<p class="empty">empty body</p>`}</div></div>`;
