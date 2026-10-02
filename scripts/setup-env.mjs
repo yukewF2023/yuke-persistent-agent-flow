@@ -31,7 +31,8 @@ const keep = (k, v) => {
 };
 keep("ORCHESTRATOR_TOKEN", rand());
 keep("WORKER_TOKEN", rand());
-for (const k of Object.keys(vars)) if (!["ORCHESTRATOR_TOKEN", "WORKER_TOKEN"].includes(k)) {
+keep("APP_TOKEN", rand()); // the DeepSpace app's token for /app/* and, once the board is closed, /api/*
+for (const k of Object.keys(vars)) if (!["ORCHESTRATOR_TOKEN", "WORKER_TOKEN", "APP_TOKEN"].includes(k)) {
   delete vars[k];
   console.log(`  ${k}: dropped (no longer used by the Worker)`);
 }

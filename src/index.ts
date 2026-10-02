@@ -3,7 +3,7 @@ import { getFile, getRawFile, putFile } from "./github";
 import { ideaRows } from "./ideas";
 import { renderAgents, renderApprovePage, renderDocPage, renderGoalsPage, renderNotFound, renderProjectPage, renderStatusPage, renderTaskLive, renderTaskPage, renderUnavailable, renderWakeResult } from "./pages";
 import type { BoardStatus, DocRow, Env, LiveStatus, Project, Role } from "./types";
-import { bearerOk, html, json, timingSafeEqual } from "./util";
+import { bearerOk, html, json, readJson, timingSafeEqual } from "./util";
 
 export { Board };
 
@@ -85,6 +85,9 @@ export default {
     } else if (parts[0] === "worker") {
       if (!bearerOk(request, env.WORKER_TOKEN)) return json({ error: "unauthorized" }, 401);
       role = "worker";
+    } else if (parts[0] === "app") {
+      if (!bearerOk(request, env.APP_TOKEN)) return json({ error: "unauthorized" }, 401);
+      role = "app";
     } else {
       const publicGet = method === "GET" && (parts.length === 0 || ["api", "tasks", "live", "goals", "docs", "projects"].includes(parts[0]));
       const publicPost = method === "POST" && parts.length === 1 && ["goals", "wake", "projects"].includes(parts[0]);
@@ -103,6 +106,71 @@ export default {
       }
     };
     try {
+      // ---- /app/*: what the signed-in human does, called by the DeepSpace app with its own token. JSON in, JSON out. ----
+      if (role === "app") {
+        const body = method === "GET" ? {} : await readJson<Record<string, unknown>>(request);
+        const text = (v: unknown, max: number) => (typeof v === "string" ? v.slice(0, max) : "");
+        /** who clicked, as the app verified it (an email); recorded as the event's actor */
+        const who = text(body.who, 40).trim() || "owner";
+        const gh = githubConfig(env);
+        if (parts[1] === "config" && method === "GET")
+          return json({ builderReady: Boolean(env.BUILDER_FIRE_URL && env.BUILDER_FIRE_TOKEN), goalsEditable: Boolean(gh.token), wakeConfigured: Boolean(env.MANAGER_FIRE_URL && env.MANAGER_FIRE_TOKEN), repo: gh.repo, branch: gh.branch });
+        if (parts[1] === "projects" && !parts[2] && method === "POST") {
+          const r = await boardCall(stub, url.origin, "/manager/projects", { doc_id: text(body.doc, 40), version: Number(body.version ?? 0), row: text(body.row, 12), idea: text(body.idea, 4000), notes: text(body.notes, 2000).replace(/\r\n?/g, "\n"), actor: who });
+          if (!r.ok) return json(r.body, r.status);
+          const id = Number((r.body.project as { id?: number } | undefined)?.id ?? 0);
+          await startBuilder(env, stub, url.origin, id);
+          return json({ ok: true, id });
+        }
+        if (parts[1] === "projects" && parts[2] && method === "POST") {
+          const id = Number(parts[2]);
+          const cur = await internal(`/api/projects/${id}`);
+          if (cur.error) return json({ error: cur.error }, cur.status === 404 ? 404 : 503);
+          const project = cur.body as Project;
+          const patch = (b: Record<string, unknown>) => boardCall(stub, url.origin, `/manager/projects/${id}`, { actor: who, ...b }, "PATCH");
+          const action = text(body.action, 20);
+          if (action === "rebuild" && ["approved", "building", "failed"].includes(project.status)) {
+            await patch({ status: "approved", note: "build requested from the board" });
+            await startBuilder(env, stub, url.origin, id);
+          } else if (action === "merged" && project.status === "ready") {
+            await patch({ status: "active", note: "merged; running in Cowork" });
+          } else if (action === "result" && !["done", "dropped"].includes(project.status)) {
+            const result = text(body.result, 300).trim();
+            if (result.length < 3) return json({ error: "Write one line saying what happened, so the idea bank can record it." }, 400);
+            await patch({ status: body.outcome === "dropped" ? "dropped" : "done", result });
+          } else return json({ error: "That action does not fit the project's current state. Reload the page." }, 409);
+          return json({ ok: true, project: (await internal(`/api/projects/${id}`)).body });
+        }
+        if (parts[1] === "goals" && !parts[2] && method === "GET") {
+          try {
+            const f = gh.token ? await getFile(gh) : { sha: null, text: await getRawFile(gh) };
+            return json({ text: f.text, sha: f.sha, editable: Boolean(gh.token), repo: gh.repo, branch: gh.branch, path: gh.path });
+          } catch (err) {
+            return json({ error: String((err as Error)?.message ?? err) }, 503);
+          }
+        }
+        if (parts[1] === "goals" && !parts[2] && method === "PUT") {
+          const content = text(body.content, 200_000).replace(/\r\n?/g, "\n").replace(/\n*$/, "\n");
+          const sha = text(body.sha, 80);
+          const message = text(body.message, 200).trim() || "GOALS.md: edit from the board";
+          if (!gh.token) return json({ error: "the board has no GITHUB_TOKEN, so it cannot commit" }, 503);
+          if (!sha) return json({ error: "no file version to compare against; reload and try again" }, 400);
+          if (!/^## Goal [A-Za-z0-9_-]+: /m.test(content)) return json({ error: "refused: the file has no `## Goal <id>: <title>` section, which would pause every goal. Keep at least one goal section." }, 400);
+          try {
+            const commit = await putFile(gh, sha, content, message);
+            goalsCache = null;
+            await boardCall(stub, url.origin, "/manager/event", { actor: who, kind: "goals.edit", text: `GOALS.md edited from the board: ${message} → ${commit.commitUrl}` });
+            return json({ ok: true, commitSha: commit.commitSha, commitUrl: commit.commitUrl });
+          } catch (err) {
+            return json({ error: String((err as Error)?.message ?? err) }, 409);
+          }
+        }
+        if (parts[1] === "wake" && method === "POST") {
+          const r = await wakeManager(env, stub, url.origin, who, text(body.reason, 200) || "button on the board");
+          return json({ ok: r.ok, message: r.message, session_url: r.sessionUrl }, r.status === 200 ? 200 : r.status);
+        }
+        return json({ error: "not found" }, 404);
+      }
       if (role === "public" && parts.length === 0) {
         const r = await internal("/api/status");
         if (r.error) return html(renderUnavailable(r.error), 503);

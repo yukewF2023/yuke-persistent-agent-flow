@@ -17,9 +17,11 @@ export interface Env {
   /** Optional: the project builder routine's API-trigger endpoint and its bearer token; approving an idea fires it. */
   BUILDER_FIRE_URL?: string;
   BUILDER_FIRE_TOKEN?: string;
+  /** Bearer token for /app/* (the DeepSpace app, which signs the human in and acts for her). It can approve, record and wake; it cannot reach /manager/*. */
+  APP_TOKEN?: string;
 }
 
-export type Role = "public" | "manager" | "worker";
+export type Role = "public" | "manager" | "worker" | "app";
 
 export type TaskStatus = "ready" | "claimed" | "running" | "review" | "accepted" | "rejected" | "blocked" | "cancelled";
 export type TaskKind = "ts" | "py" | "check" | "other" | "doc";
@@ -170,6 +172,8 @@ export interface DocMeta {
 }
 export interface DocRow extends DocMeta {
   body: string;
+  /** rows of the document's idea tables (GET /api/docs/:id only), so readers need no table parser of their own */
+  idea_rows?: { table: number; index: number; ref: string; idea: string; cells: Record<string, string> }[];
   log: { ts: number; version: number; note: string | null; bytes: number }[];
 }
 

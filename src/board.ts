@@ -190,7 +190,7 @@ export class Board extends DurableObject<Env> {
       if (m === "GET" && p[0] === "api" && p[1] === "docs" && !p[2]) return json(this.docIndex());
       if (m === "GET" && p[0] === "api" && p[1] === "docs" && p[2]) {
         const d = this.docGet(p[2]);
-        return d ? json(d) : json({ error: "not found" }, 404);
+        return d ? json({ ...d, idea_rows: ideaRows(d.body) }) : json({ error: "not found" }, 404);
       }
       if (m === "GET" && p[0] === "api" && p[1] === "projects" && !p[2]) return json(this.listProjects(url));
       if (m === "GET" && p[0] === "api" && p[1] === "projects" && p[2]) {
