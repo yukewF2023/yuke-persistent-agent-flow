@@ -39,7 +39,7 @@
 - Verified locally only: `scripts/smoke.sh` (120 checks) on this version; the app's unit tests (15) and Playwright specs (24), including a signed-in non-owner being refused everywhere. The owner's own clicks through the real sign-in are untested until Yuke signs in.
 
 ## Pending human steps (each is one command once the value exists)
-- App: `npx wrangler secret put APP_TOKEN` is covered by `npm run secrets:push`; then in `../agent-board`, `npx deepspace deploy`.
+- App: `npm run secrets:push` (sends `APP_TOKEN` to the Worker with the other two), then in `../agent-board`, `npx deepspace deploy`.
 - Projects: create `yukewF2023/projects` (private) and install the Claude GitHub App on it; create the "Project builder" routine; `npx wrangler secret put BUILDER_FIRE_URL` and `BUILDER_FIRE_TOKEN` from the routine's API trigger. Steps in docs/PROJECTS.md.
 - `npx wrangler secret put GITHUB_TOKEN` — fine-grained PAT, repository `yukewF2023/yuke-persistent-agent-flow` only, permission Contents: read and write. Enables Save on /goals.
 - `npx wrangler secret put MANAGER_FIRE_URL` and `npx wrangler secret put MANAGER_FIRE_TOKEN` — from the :13 routine's Edit → Add another trigger → API → Generate token. Enables the wake button; pushes already wake the manager without it.
