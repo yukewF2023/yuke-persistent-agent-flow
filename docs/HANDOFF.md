@@ -25,7 +25,14 @@
 - Worker preference: worker 2 was switched from D to E on the VM on 2026-09-30 (`WORKER_GOALS=E` in `/etc/agent-worker-2.env`, then `systemctl restart agent-worker@2`; the board shows `goals ["E"]`). The local `worker/agent-worker.env` has no `WORKER_GOALS_<n>` lines, so a re-install leaves the VM's files as they are; add `WORKER_GOALS_1=C` and `WORKER_GOALS_2=E` there to have the installer write them. Goal E's tasks also carry priority 4 against Goal C's 5, so a worker that runs out of its own goal's tasks serves E first.
 - Manager prompt: the ideation mix and the task priority follow the goal body when it states them; a goal that borrows another goal's framing gets those paragraphs copied into each spec.
 
+## 2026-10-02: projects (approve an idea → a Cowork-ready project folder)
+- New layer, described in docs/PROJECTS.md: every idea-bank row has "Approve →"; approving records a project (`projects` table), fires the builder routine, and the project page (`/projects/<id>`, Projects tab, "Needs attention") follows it through approved → building → ready → active → done or dropped. `src/ideas.ts` parses idea tables; `src/index.ts` shares `fireRoutine` between the wake button and the builder.
+- The builder's prompt, the project-folder contract (parallel workstreams, one Cowork session each), the template and a self-check live in the separate private repository `yukewF2023/projects` (local clone `../projects`).
+- Manager prompt: a row with a project is pinned in its bank and its Status is set from the project (`queued (P<id>)`, `tested (P<id>): …`, `dropped (P<id>): …`).
+- Verified locally only: `scripts/smoke.sh` (108 checks) and the pages in the browser preview at phone and desktop widths. Not yet done: create the repository and the routine, set the two builder secrets, deploy, and one end-to-end run from an approve click.
+
 ## Pending human steps (each is one command once the value exists)
+- Projects: create `yukewF2023/projects` (private) and install the Claude GitHub App on it; create the "Project builder" routine; `npx wrangler secret put BUILDER_FIRE_URL` and `BUILDER_FIRE_TOKEN` from the routine's API trigger. Steps in docs/PROJECTS.md.
 - `npx wrangler secret put GITHUB_TOKEN` — fine-grained PAT, repository `yukewF2023/yuke-persistent-agent-flow` only, permission Contents: read and write. Enables Save on /goals.
 - `npx wrangler secret put MANAGER_FIRE_URL` and `npx wrangler secret put MANAGER_FIRE_TOKEN` — from the :13 routine's Edit → Add another trigger → API → Generate token. Enables the wake button; pushes already wake the manager without it.
 - Optional: `OPENCODE_SHARE=auto` in `worker/agent-worker.env` + re-run the install to get public transcript links on task pages and in the live view (opencode.ai share pages are public).

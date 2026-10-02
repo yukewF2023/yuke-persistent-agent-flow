@@ -42,6 +42,7 @@ for t in d["running"]: print("  #%d %s %s by %s since %s"%(t["id"],t["key"],t["s
 print("BLOCKED")
 for t in d["blocked"]: print("  #%d %s: %s"%(t["id"],t["key"],(t.get("last_error") or "")[:120]))
 print("NEEDS HUMAN"); [print("  - "+n["text"]) for n in d["needsHuman"]]
+print("PROJECTS"); [print("  P%d %s %s (%s) %s"%(p["id"],p["status"],p.get("slug") or "-",p["doc_id"],p["idea"][:80])) for p in d.get("projects",[]) if p["status"] not in ("done","dropped")]
 m=d["manager"]; print("MANAGER last run %s%s"%(ago(m["lastRunAt"])," · LOCKED" if m["lockedUntil"] else ""))
 cf=d.get("cloudflare") or {}
 if cf: print("CLOUDFLARE rows today: read %s / %s · written %s / %s"%(format(cf["reads"],","),format(cf["readLimit"],","),format(cf["writes"],","),format(cf["writeLimit"],",")))
@@ -147,6 +148,9 @@ PY
   docs)          get /manager/docs | python3 -c 'import json,sys,time;[print("%-24s v%-3d %6d bytes  %s  %s"%(d["id"],d["version"],d["bytes"],time.strftime("%m-%d %H:%MZ",time.gmtime(d["updated_at"]/1000)),d.get("note") or "")) for d in json.load(sys.stdin)]' ;;
   doc-get)       get "/manager/docs/${1:?doc id}" | python3 -c 'import json,sys;d=json.load(sys.stdin);sys.stdout.write(d["body"]) if "body" in d else print(json.dumps(d))' ;;
   doc-put)       python3 -c 'import json,sys;print(json.dumps({"body":open(sys.argv[1]).read(),"title":sys.argv[2],"note":sys.argv[3]}))' "${2:?markdown file}" "${3:-}" "${4:-}" > /tmp/board-doc.json; sendfile PUT "/manager/docs/${1:?doc id}" /tmp/board-doc.json | j ;;
+  projects)      get "/manager/projects?status=${1:-}" | python3 -c 'import json,sys;[print("P%d %-9s %-24s %-15s %s%s"%(p["id"],p["status"],p.get("slug") or "-",p["doc_id"],p["idea"][:100],(" → "+p["result"]) if p.get("result") else "")) for p in json.load(sys.stdin)]' ;;
+  project)       get "/manager/projects/${1:?project id}" | j ;;
+  project-set)   send PATCH "/manager/projects/${1:?project id}" "${2:?json, e.g. {\"status\":\"active\"}}" | j ;;
   needs-human)   get /manager/needs-human | j ;;
   needs-human-add) send POST /manager/needs-human "{\"text\":$(printf '%s' "${1:?text}" | jstr)}" | j ;;
   needs-human-clear) send DELETE "/manager/needs-human/${1:-}" | j ;;

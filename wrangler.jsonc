@@ -21,5 +21,6 @@
   ]
   // Secrets (wrangler secret put): ORCHESTRATOR_TOKEN (manager), WORKER_TOKEN (workers);
   // optional GITHUB_TOKEN (fine-grained PAT, contents read/write, for the /goals editor) and
-  // MANAGER_FIRE_URL + MANAGER_FIRE_TOKEN (the routine's API trigger, for the wake button).
+  // MANAGER_FIRE_URL + MANAGER_FIRE_TOKEN (the routine's API trigger, for the wake button) and
+  // BUILDER_FIRE_URL + BUILDER_FIRE_TOKEN (the project builder routine's API trigger; approving an idea fires it).
 }

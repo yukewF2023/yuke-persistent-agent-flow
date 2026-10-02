@@ -47,6 +47,7 @@ A task moves through these states:
 | The board: a status strip (workers, ready, in progress, review, accepted today, blocked, spend, manager) above tabs: **Overview** (pipeline bar, agents, needs-attention, recent activity, goals progress), **Pipeline** (ready / in progress / review / accepted / blocked columns), **Agents** (the manager and each worker, live), **Goals** (progress and the goal bodies), **Activity** (every event, filterable), **Budget** (Go windows, last 7 days, Cloudflare free tier) | https://yuke-persistent-agent-flow.yuke-521.workers.dev — the tab is in the URL hash (`/#pipeline`, `/#agents`, `/#activity`…), so a bookmark opens straight to it; with JavaScript off the same page shows every section top to bottom |
 | One task: spec, acceptance checklist, every review verdict, the report and the files | click any task on the board (`/tasks/<id>`) |
 | What a worker is doing right now: step, current tool call, tokens and cost so far, the last 30 session events | the [Agents tab](https://yuke-persistent-agent-flow.yuke-521.workers.dev/#agents) (refreshes every 20 s) and the "Live session" section of the running task's page; JSON at `/api/live` and `/api/tasks/<id>/progress` |
+| Turning an idea into a project | every row of an idea bank (`/docs/ideas-outreach`, `/docs/ideas-b2b`) has **Approve →**; the [Projects tab](https://yuke-persistent-agent-flow.yuke-521.workers.dev/#projects) follows each one from the builder's pull request to its result; see [docs/PROJECTS.md](docs/PROJECTS.md) |
 | Editing the goals | https://yuke-persistent-agent-flow.yuke-521.workers.dev/goals — GOALS.md in a form; Save makes one commit on `main` (needs the board token and, once, a GitHub token on the Worker: see [manager/ROUTINE.md](manager/ROUTINE.md) and the page itself); git history at https://github.com/yukewF2023/yuke-persistent-agent-flow/commits/main/GOALS.md |
 | Waking the manager now | any push to `main` fires it within about a minute (GitHub trigger); the "Wake now" button on the Manager card or `scripts/board.sh wake` (once the routine's API trigger is configured); details in [manager/ROUTINE.md](manager/ROUTINE.md) |
 | The manager's runs, with full transcripts | https://claude.ai/code/routines/trig_0144Fo1i6xENAvLa58h3BBQ1 (:13) and https://claude.ai/code/routines/trig_019wCc3dqf85HAAtkfDTwUtG (:43) |
@@ -111,5 +112,5 @@ manager/            PROMPT.md (the manager loop), ROUTINE.md (how the routine is
 worker/             worker.mjs (the loop), install.sh (VM bootstrap), agent-worker@.service, templates/, run-tests, README.md
 scripts/            board.sh (CLI), monitor.sh, setup-env.mjs
 src/                index.ts (router), board.ts (Durable Object), pages.ts (status + task pages), util.ts, types.ts
-docs/               PLAN.md (design), HANDOFF.md (state for the next session)
+docs/               PLAN.md (design), PROJECTS.md (approve an idea → a Cowork project), HANDOFF.md (state for the next session)
 ```

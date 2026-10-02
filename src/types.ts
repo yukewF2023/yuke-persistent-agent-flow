@@ -14,6 +14,9 @@ export interface Env {
   /** Optional: the manager routine's API-trigger endpoint (…/routines/<id>/fire) and its bearer token, for the wake button. */
   MANAGER_FIRE_URL?: string;
   MANAGER_FIRE_TOKEN?: string;
+  /** Optional: the project builder routine's API-trigger endpoint and its bearer token; approving an idea fires it. */
+  BUILDER_FIRE_URL?: string;
+  BUILDER_FIRE_TOKEN?: string;
 }
 
 export type Role = "public" | "manager" | "worker";
@@ -170,6 +173,45 @@ export interface DocRow extends DocMeta {
   log: { ts: number; version: number; note: string | null; bytes: number }[];
 }
 
+/**
+ * A project: an idea a human approved from an idea bank, which the builder routine turns into a folder in the projects repository.
+ * approved → building → ready (pull request open) → active (merged, running in Cowork) → done | dropped; failed when the build broke.
+ */
+export type ProjectStatus = "approved" | "building" | "ready" | "active" | "done" | "dropped" | "failed";
+export interface ProjectRow {
+  id: number;
+  /** folder name in the projects repository, set by the builder */
+  slug: string | null;
+  /** the idea bank the row came from, and its version when approved */
+  doc_id: string;
+  doc_version: number;
+  /** the row's "Idea" cell as approved (the bank is rewritten later; this copy is not) */
+  idea: string;
+  row: string; // JSON {column: cell}
+  /** what the human typed when approving */
+  notes: string;
+  status: ProjectStatus;
+  pr_url: string | null;
+  /** the builder run's transcript */
+  session_url: string | null;
+  /** one line recorded by the human when the project ends */
+  result: string | null;
+  /** the last status note (why a build failed, what the builder produced) */
+  note: string | null;
+  log: string; // JSON ProjectLogEntry[]
+  created_at: number;
+  updated_at: number;
+}
+export interface ProjectLogEntry {
+  ts: number;
+  actor: string;
+  status: ProjectStatus;
+  text: string;
+}
+/** A project as the API returns it. */
+export type Project = Omit<ProjectRow, "row" | "log"> & { row: Record<string, string>; log: ProjectLogEntry[] };
+export type ProjectSummary = Pick<ProjectRow, "id" | "slug" | "doc_id" | "idea" | "status" | "pr_url" | "session_url" | "result" | "note" | "created_at" | "updated_at">;
+
 export interface SpendSummary {
   todayUsd: number;
   fiveHourUsd: number;
@@ -213,6 +255,8 @@ export interface BoardStatus {
   acceptedToday: number;
   /** the manager-maintained briefs (metadata only; bodies at /api/docs/<id>) */
   docs: DocMeta[];
+  /** approved ideas and what became of them, newest first (at most 40) */
+  projects: ProjectSummary[];
   spend: SpendSummary;
   needsHuman: { ts: number; text: string }[];
   events: EventRow[];

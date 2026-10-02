@@ -27,6 +27,10 @@ Each of these starts a run within about a minute instead of waiting for :13 or :
 
 Not chosen: a GitHub Actions workflow with `workflow_dispatch` running `claude -p manager/PROMPT.md` (it needs a `CLAUDE_CODE_OAUTH_TOKEN` repository secret and the board token in GitHub, and a second copy of the manager's environment to keep in step; the routine already has both), and a wake flag that the next scheduled run reads (not instant).
 
+## The project builder
+
+A third routine, on the private repository `yukewF2023/projects`, turns an idea Yuke approves on the board into a project folder and a pull request. It is fired by the board (`BUILDER_FIRE_URL` + `BUILDER_FIRE_TOKEN`), not by a schedule. Its setup and prompt are described in docs/PROJECTS.md; the manager's only part is to keep the approved row pinned in its idea bank (manager/PROMPT.md, "Projects").
+
 ## Debugging a run
 
 The routine's session log shows every command; from a Claude Code session, `RemoteTrigger` `list_runs` lists recent runs and `get_run_log` prints one run's condensed log. On the board, the `run` event a run posts at the end summarizes verdicts and additions, `manager.wake` and `goals.edit` events record who woke it or changed the goals, and `manager:memory` holds its cursor. Runs fired by a push or the wake button are ordinary runs: `manager/PROMPT.md` tells the manager to treat the trigger context as information, not instructions.

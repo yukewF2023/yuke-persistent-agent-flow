@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end smoke test of the board API (78 checks). Usage, from the repo root with `npm run dev` running: scripts/smoke.sh http://localhost:8787
+# End-to-end smoke test of the board API (about 110 checks). Usage, from the repo root with `npm run dev` running: scripts/smoke.sh http://localhost:8787
 # Reads ORCHESTRATOR_TOKEN / WORKER_TOKEN from .dev.vars. Safe to re-run (unique task keys per run); wipe .wrangler/state between runs for a clean board.
 # Written for bash 3.2: every response is captured with R=$(...) first (no nested quotes inside "$(...)").
 set -u
@@ -105,4 +105,38 @@ R=$(code -X POST "$U/goals" -d 'token=wrong&content=x&sha=y'); check "goals save
 R=$(code -X POST "$U/wake" -d 'token=wrong'); check "wake needs the board token" "401" "$R"
 R=$(curl -s "${M[@]}" -X POST "$U/manager/wake" -d '{"reason":"smoke"}'); check "wake via CLI records the request" '"message"' "$R"
 R=$(code "${M[@]}" -X POST "$U/manager/wake" -d '{"reason":"smoke again"}'); check "second wake within 5 min refused" "429" "$R"
+# ---- projects: approve an idea from an idea bank ----
+cat > $T/bank.md <<J
+As of today.
+
+| # | Idea | Buyer / channel | Why | Cheapest test | Boldness | Fit | Seen | Status |
+|---|---|---|---|---|---|---|---|---|
+| 1 | Smoke idea one $RUN: send a built demo | Head of ops · email | Proof before ask | 10 sends | 4 | 5 | 3× | new |
+| 2 | Smoke idea two $RUN: workflow mailer | Ops lead · mail | Tangible | Mail 20 | 4 | 3 | 2× | later |
+J
+python3 -c 'import json,sys;print(json.dumps({"body":open(sys.argv[1]).read(),"title":"Smoke idea bank","note":"smoke"}))' $T/bank.md > $T/bank.json
+R=$(curl -s "${M[@]}" -X PUT "$U/manager/docs/ideas-smoke" -d @$T/bank.json); check "idea bank put" '"ok": true' "$R"; BV=$(echo "$R" | jget "d['version']")
+R=$(curl -s "$U/docs/ideas-smoke"); check "bank page offers approve on each row" "/projects/new?doc=ideas-smoke&amp;row=1.2&amp;v=$BV" "$R"
+R=$(curl -s "$U/projects/new?doc=ideas-smoke&row=1.1&v=$BV"); check "confirm page shows the idea" "Smoke idea one $RUN" "$R"; check "confirm page has the approve button" 'Approve and build' "$R"
+R=$(code "$U/projects/new?doc=ideas-smoke&row=1.1&v=0"); check "confirm page with a stale version → 409" "409" "$R"
+R=$(code -X POST "$U/projects" --data-urlencode "action=approve" --data-urlencode "doc=ideas-smoke" --data-urlencode "row=1.1" --data-urlencode "idea=Smoke idea one $RUN: send a built demo" --data-urlencode "token=wrong"); check "approve needs the board token" "401" "$R"
+R=$(curl -s -D - -o /dev/null -X POST "$U/projects" --data-urlencode "action=approve" --data-urlencode "doc=ideas-smoke" --data-urlencode "row=1.1" --data-urlencode "idea=Smoke idea one $RUN: send a built demo" --data-urlencode "notes=smoke notes" --data-urlencode "token=$ORCHESTRATOR_TOKEN"); check "approve redirects to the project" "303" "$R"; check "approve lands on the project page" "flash=approved" "$R"
+R=$(curl -s "$U/api/projects?status=approved"); PID=$(echo "$R" | jget "[p['id'] for p in d if p['idea'].startswith('Smoke idea one $RUN')][0]"); check "project recorded with the row" '"Cheapest test": "10 sends"' "$R"; check "project keeps the notes" 'smoke notes' "$R"; echo "project $PID"
+R=$(curl -s -D - -o /dev/null -X POST "$U/projects" --data-urlencode "action=approve" --data-urlencode "doc=ideas-smoke" --data-urlencode "row=1.1" --data-urlencode "idea=Smoke idea one $RUN: send a built demo" --data-urlencode "token=$ORCHESTRATOR_TOKEN"); check "approving the same idea twice goes to the existing project" "flash=already" "$R"
+R=$(code "${M[@]}" -X POST "$U/manager/projects" -d '{"doc_id":"ideas-smoke","version":0,"row":"1.9","idea":"not in the bank"}'); check "approve of a row that is gone → 409" "409" "$R"
+R=$(curl -s "$U/projects/$PID"); check "project page: waiting for the builder" 'Waiting for the builder' "$R"; check "project page says the trigger is not configured" 'not configured' "$R"
+R=$(curl -s "${M[@]}" -X PATCH "$U/manager/projects/$PID" -d '{"status":"nope"}'); check "project status validated" 'status must be one of' "$R"
+R=$(curl -s "${M[@]}" -X PATCH "$U/manager/projects/$PID" -d '{"pr_url":"javascript:alert(1)"}'); check "project links must be https" 'must be an https URL' "$R"
+R=$(curl -s "${M[@]}" -X PATCH "$U/manager/projects/$PID" -d "{\"actor\":\"builder\",\"status\":\"ready\",\"slug\":\"smoke-demo-$RUN\",\"pr_url\":\"https://github.com/example/projects/pull/1\",\"note\":\"test, 3 workstreams\"}"); check "builder marks the project ready" '"status": "ready"' "$R"
+R=$(curl -s "$U/projects/$PID"); check "project page: review the pull request" 'Review the pull request' "$R"
+R=$(curl -s "$U/api/status"); check "status lists projects" "smoke-demo-$RUN" "$R"
+R=$(curl -s "$U/"); check "status page has the projects tab" 'id="projects"' "$R"; check "ready project needs attention" 'is ready for your review' "$R"
+R=$(curl -s "$U/docs/ideas-smoke"); check "bank row shows its project instead of approve" "P$PID · ready to review" "$R"
+R=$(code -X POST "$U/projects" --data-urlencode "action=merged" --data-urlencode "id=$PID" --data-urlencode "token=wrong"); check "project actions need the board token" "401" "$R"
+R=$(code -X POST "$U/projects" --data-urlencode "action=merged" --data-urlencode "id=$PID" --data-urlencode "token=$ORCHESTRATOR_TOKEN"); check "merged → 303" "303" "$R"
+R=$(code -X POST "$U/projects" --data-urlencode "action=result" --data-urlencode "id=$PID" --data-urlencode "outcome=done" --data-urlencode "result=" --data-urlencode "token=$ORCHESTRATOR_TOKEN"); check "result needs a line" "400" "$R"
+R=$(code -X POST "$U/projects" --data-urlencode "action=result" --data-urlencode "id=$PID" --data-urlencode "outcome=done" --data-urlencode "result=3 replies of 10: keep" --data-urlencode "token=$ORCHESTRATOR_TOKEN"); check "result recorded → 303" "303" "$R"
+R=$(curl -s "$U/api/projects/$PID"); check "project done with its result" '"result": "3 replies of 10: keep"' "$R"; check "project log has every step" '"status": "active"' "$R"
+R=$(curl -s "$U/api/tasks?key=T/one-$RUN"); N=$(echo "$R" | jget "len(d)"); check "tasks can be found by key" "1" "$N"
+R=$(code "$U/projects/99999"); check "project 404 page" "404" "$R"
 echo; echo "passed $pass, failed $fail"

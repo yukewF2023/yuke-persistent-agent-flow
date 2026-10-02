@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
-import type { BoardStatus, DeliverableRow, DocMeta, DocRow, Env, EventRow, GoalRow, LiveStatus, ProgressRow, ProgressSnapshot, ReviewRow, Role, SpendSummary, TaskRow, TaskStatus, WorkerRow } from "./types";
+import { ideaRows } from "./ideas";
+import type { BoardStatus, DeliverableRow, DocMeta, DocRow, Env, EventRow, GoalRow, LiveStatus, ProgressRow, ProgressSnapshot, Project, ProjectLogEntry, ProjectRow, ProjectStatus, ProjectSummary, ReviewRow, Role, SpendSummary, TaskRow, TaskStatus, WorkerRow } from "./types";
 import { json, readJson, secondsToUtcMidnight, utcDayStart } from "./util";
 
 /** OpenCode Go usage windows in USD (the workers' model provider). */
@@ -23,6 +24,10 @@ const PROGRESS_KEEP_MS = 3 * 86_400_000;
 const DOC_MAX_BYTES = 32_000;
 const DOC_LOG_KEEP = 30;
 const DOC_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+/** Projects: ideas a human approved from an idea bank. A handful of rows; the log on each row is its timeline. */
+const PROJECT_STATUSES: ProjectStatus[] = ["approved", "building", "ready", "active", "done", "dropped", "failed"];
+const PROJECT_LOG_KEEP = 30;
+const PROJECT_SLUG = /^[a-z0-9]+(-[a-z0-9]+){0,5}$/;
 const KINDS = ["ts", "py", "check", "other", "doc"];
 const TERMINAL: TaskStatus[] = ["accepted", "rejected", "cancelled"];
 
@@ -155,6 +160,9 @@ export class Board extends DurableObject<Env> {
       CREATE INDEX IF NOT EXISTS spend_ts ON spend(ts);
       CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS progress (task_id INTEGER PRIMARY KEY, attempt INTEGER NOT NULL, worker_id TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT, doc_id TEXT NOT NULL, doc_version INTEGER NOT NULL, idea TEXT NOT NULL, row TEXT NOT NULL,
+        notes TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'approved', pr_url TEXT, session_url TEXT, result TEXT, note TEXT, log TEXT NOT NULL DEFAULT '[]',
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
       DROP INDEX IF EXISTS progress_updated;
     `);
     // additive migrations (SQLite has no ADD COLUMN IF NOT EXISTS)
@@ -183,6 +191,11 @@ export class Board extends DurableObject<Env> {
       if (m === "GET" && p[0] === "api" && p[1] === "docs" && p[2]) {
         const d = this.docGet(p[2]);
         return d ? json(d) : json({ error: "not found" }, 404);
+      }
+      if (m === "GET" && p[0] === "api" && p[1] === "projects" && !p[2]) return json(this.listProjects(url));
+      if (m === "GET" && p[0] === "api" && p[1] === "projects" && p[2]) {
+        const pr = this.projectGet(Number(p[2]));
+        return pr ? json(pr) : json({ error: "not found" }, 404);
       }
       if (m === "GET" && p[0] === "api" && p[1] === "tasks" && !p[2]) return json(this.listTasks(url));
       if (m === "GET" && p[0] === "api" && p[1] === "tasks" && p[2] && p[3] === "progress") return this.progressDetail(Number(p[2]));
@@ -246,6 +259,7 @@ export class Board extends DurableObject<Env> {
       blocked,
       acceptedToday,
       docs: this.docIndex(),
+      projects: this.q<ProjectSummary>("SELECT id, slug, doc_id, idea, status, pr_url, session_url, result, note, created_at, updated_at FROM projects ORDER BY id DESC LIMIT 40"),
       spend: this.spendSummary(now),
       needsHuman: this.kvJson<{ ts: number; text: string }[]>("needs_human") ?? [],
       events,
@@ -263,6 +277,8 @@ export class Board extends DurableObject<Env> {
     const goal = url.searchParams.get("goal");
     const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? 50)));
     const cols = "id, goal_id, key, title, kind, status, priority, attempt, max_attempts, max_minutes, worker_id, lease_until, submitted_at, finished_at, cost_usd, steps, last_error, updated_at";
+    const key = url.searchParams.get("key");
+    if (key) return this.q<Partial<TaskRow>>(`SELECT ${cols} FROM tasks WHERE key = ?`, key);
     if (status && goal) return this.q<Partial<TaskRow>>(`SELECT ${cols} FROM tasks WHERE status = ? AND goal_id = ? ORDER BY priority, id LIMIT ?`, status, goal, limit);
     if (status) return this.q<Partial<TaskRow>>(`SELECT ${cols} FROM tasks WHERE status = ? ORDER BY priority, id LIMIT ?`, status, limit);
     if (goal) return this.q<Partial<TaskRow>>(`SELECT ${cols} FROM tasks WHERE goal_id = ? ORDER BY id DESC LIMIT ?`, goal, limit);
@@ -373,6 +389,7 @@ export class Board extends DurableObject<Env> {
       reviews: this.q<ReviewRow>("SELECT * FROM reviews ORDER BY id LIMIT 5000"),
       events: this.q<EventRow>("SELECT * FROM events ORDER BY id DESC LIMIT 1000"),
       workers: this.q<WorkerRow>("SELECT * FROM workers"),
+      projects: this.q<ProjectRow>("SELECT * FROM projects ORDER BY id LIMIT 500"),
       spend: this.q<{ ts: number; task_id: number; attempt: number; usd: number; tokens: number }>("SELECT ts, task_id, attempt, usd, tokens FROM spend WHERE ts >= ? ORDER BY id", now - 40 * 86_400_000),
       kv: Object.fromEntries(this.q<{ key: string; value: string }>("SELECT key, value FROM kv").map((r) => [r.key, r.value]))
     });
@@ -719,6 +736,13 @@ export class Board extends DurableObject<Env> {
       this.touch();
       return json({ ok: true });
     }
+    if (p[0] === "projects" && !p[1] && m === "GET") return json(this.listProjects(url));
+    if (p[0] === "projects" && !p[1] && m === "POST") return this.projectCreate(await readJson(request), now);
+    if (p[0] === "projects" && p[1] && m === "GET") {
+      const pr = this.projectGet(Number(p[1]));
+      return pr ? json(pr) : json({ error: "not found" }, 404);
+    }
+    if (p[0] === "projects" && p[1] && m === "PATCH") return this.projectPatch(Number(p[1]), await readJson(request), now);
     if (p[0] === "pace" && m === "PUT") {
       const body = await readJson<{ usd_per_day?: unknown }>(request);
       const v = num(body.usd_per_day);
@@ -831,6 +855,107 @@ export class Board extends DurableObject<Env> {
     this.event("manager", "doc.update", null, `brief ${id} v${version}${note ? `: ${note}` : ""} (${text.length} bytes)`);
     this.touch();
     return json({ ok: true, version, bytes: text.length });
+  }
+
+  // ---- projects: ideas a human approved, on their way to a folder in the projects repository ----
+  private projectOut(r: ProjectRow): Project {
+    const parse = <T>(s: string, d: T): T => {
+      try {
+        return JSON.parse(s) as T;
+      } catch {
+        return d;
+      }
+    };
+    return { ...r, row: parse<Record<string, string>>(r.row, {}), log: parse<ProjectLogEntry[]>(r.log, []) };
+  }
+  private projectGet(id: number): Project | null {
+    const r = Number.isInteger(id) ? this.one<ProjectRow>("SELECT * FROM projects WHERE id = ?", id) : undefined;
+    return r ? this.projectOut(r) : null;
+  }
+  private listProjects(url: URL): Project[] {
+    const status = url.searchParams.get("status");
+    const rows = status ? this.q<ProjectRow>("SELECT * FROM projects WHERE status = ? ORDER BY id DESC LIMIT 100", status) : this.q<ProjectRow>("SELECT * FROM projects ORDER BY id DESC LIMIT 100");
+    return rows.map((r) => this.projectOut(r));
+  }
+  /**
+   * POST /manager/projects {doc_id, version, row, idea, notes} — a human approved one row of an idea bank. The row is copied
+   * (the manager rewrites the bank, and rows have no id): by position when the bank is still at the version the page showed,
+   * otherwise by its exact idea text. 409 "changed" when neither matches, 409 "duplicate" when the idea already has a project.
+   */
+  private projectCreate(body: Record<string, unknown>, now: number): Response {
+    const docId = str(body.doc_id, 40);
+    const d = this.docGet(docId);
+    if (!d) return json({ error: "no such idea bank" }, 404);
+    const rows = ideaRows(d.body);
+    const text = str(body.idea, 4000);
+    let row = num(body.version) === d.version ? rows.find((r) => r.ref === str(body.row, 12)) : undefined;
+    if (row && text && row.idea !== text) row = undefined;
+    if (!row && text) {
+      const same = rows.filter((r) => r.idea === text);
+      if (same.length === 1) row = same[0];
+    }
+    if (!row) return json({ error: "changed", version: d.version }, 409);
+    const dup = this.one<{ id: number }>("SELECT id FROM projects WHERE doc_id = ? AND idea = ? AND status != 'dropped' LIMIT 1", docId, row.idea);
+    if (dup) return json({ error: "duplicate", id: dup.id }, 409);
+    const who = str(body.actor, 40) || "human";
+    const log: ProjectLogEntry[] = [{ ts: now, actor: who, status: "approved", text: `approved from ${docId} v${d.version}` }];
+    this.run(
+      "INSERT INTO projects(doc_id, doc_version, idea, row, notes, status, log, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'approved', ?, ?, ?)",
+      docId,
+      d.version,
+      row.idea,
+      JSON.stringify(row.cells),
+      str(body.notes, 2000).trim(),
+      JSON.stringify(log),
+      now,
+      now
+    );
+    const id = Number(this.one<{ id: number }>("SELECT last_insert_rowid() AS id")?.id ?? 0);
+    this.event(who, "project.approve", null, `P${id} approved from ${docId} v${d.version}: ${row.idea.slice(0, 200)}`);
+    this.touch();
+    return json({ ok: true, project: this.projectGet(id) });
+  }
+  /** PATCH /manager/projects/:id {status, slug, pr_url, session_url, result, note, actor} — the builder reports progress; a human records the result. */
+  private projectPatch(id: number, body: Record<string, unknown>, now: number): Response {
+    const pr = this.projectGet(id);
+    if (!pr) return json({ error: "not found" }, 404);
+    const sets: string[] = [];
+    const params: (string | number | null)[] = [];
+    const set = (col: string, v: string | null) => {
+      sets.push(`${col} = ?`);
+      params.push(v);
+    };
+    let status = pr.status;
+    if (body.status !== undefined) {
+      if (!PROJECT_STATUSES.includes(body.status as ProjectStatus)) return json({ error: `status must be one of ${PROJECT_STATUSES.join(", ")}` }, 400);
+      status = body.status as ProjectStatus;
+      set("status", status);
+    }
+    if (body.slug !== undefined) {
+      const slug = str(body.slug, 40);
+      if (!PROJECT_SLUG.test(slug)) return json({ error: "slug must be kebab-case (lowercase letters, digits, dashes)" }, 400);
+      if (this.one<{ id: number }>("SELECT id FROM projects WHERE slug = ? AND id != ?", slug, id)) return json({ error: `slug ${slug} is taken` }, 409);
+      set("slug", slug);
+    }
+    for (const col of ["pr_url", "session_url"] as const) {
+      if (body[col] === undefined) continue;
+      const v = str(body[col], 500);
+      if (v && !/^https:\/\/[^\s"<>]+$/.test(v)) return json({ error: `${col} must be an https URL` }, 400);
+      set(col, v || null);
+    }
+    if (body.result !== undefined) set("result", str(body.result, 300).trim() || null);
+    const note = body.note !== undefined ? str(body.note, 300).trim() : "";
+    if (body.note !== undefined || body.status !== undefined) set("note", note || null);
+    if (!sets.length) return json({ error: "nothing to change" }, 400);
+    const who = str(body.actor, 40) || "manager";
+    const text = note || (body.result !== undefined ? str(body.result, 300).trim() : "") || Object.keys(body).filter((k) => k !== "actor" && k !== "status").join(", ");
+    set("log", JSON.stringify(pr.log.concat([{ ts: now, actor: who, status, text }]).slice(-PROJECT_LOG_KEEP)));
+    sets.push("updated_at = ?");
+    params.push(now, id);
+    this.run(`UPDATE projects SET ${sets.join(", ")} WHERE id = ?`, ...params);
+    this.event(who, "project.update", null, `P${id}${pr.slug ? ` ${pr.slug}` : ""}: ${status}${text ? ` · ${text}` : ""}`);
+    this.touch();
+    return json({ ok: true, project: this.projectGet(id) });
   }
 
   private createTasks(body: unknown, now: number): Response {

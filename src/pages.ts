@@ -1,4 +1,5 @@
-import type { BoardStatus, DeliverableRow, DocRow, EventRow, LiveStatus, ProgressEvent, ProgressSnapshot, ReviewRow, TaskRow } from "./types";
+import { ideaColumn, ideaRows, type IdeaRow } from "./ideas";
+import type { BoardStatus, DeliverableRow, DocRow, EventRow, LiveStatus, ProgressEvent, ProgressSnapshot, Project, ProjectStatus, ProjectSummary, ReviewRow, TaskRow } from "./types";
 import { ago, dur, esc, usd, when } from "./util";
 
 /**
@@ -6,9 +7,9 @@ import { ago, dur, esc, usd, when } from "./util";
  * only on status. Every page renders completely without JavaScript; the script adds tabs, live refresh, filters and the theme toggle.
  */
 const CSS = `
-:root{--bg:#0c0e13;--panel:#13161d;--panel2:#191d26;--line:#262b38;--fg:#e8eaf0;--muted:#8d94a6;--dim:#5f6779;--accent:#7aa7ff;--ok:#3fcf8e;--warn:#f2b84b;--bad:#ff6b6b;--r:6px;--sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-@media(prefers-color-scheme:light){:root:not([data-theme=dark]){--bg:#f3f4f7;--panel:#fff;--panel2:#f6f7fa;--line:#e2e5ec;--fg:#181b23;--muted:#5e6678;--dim:#8d94a6;--accent:#2b66d9}}
-:root[data-theme=light]{--bg:#f3f4f7;--panel:#fff;--panel2:#f6f7fa;--line:#e2e5ec;--fg:#181b23;--muted:#5e6678;--dim:#8d94a6;--accent:#2b66d9}
+:root{--bg:#0c0e13;--panel:#13161d;--panel2:#191d26;--line:#262b38;--fg:#e8eaf0;--muted:#8d94a6;--dim:#5f6779;--accent:#7aa7ff;--on-accent:#0c0e13;--ok:#3fcf8e;--warn:#f2b84b;--bad:#ff6b6b;--r:6px;--sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+@media(prefers-color-scheme:light){:root:not([data-theme=dark]){--bg:#f3f4f7;--panel:#fff;--panel2:#f6f7fa;--line:#e2e5ec;--fg:#181b23;--muted:#5e6678;--dim:#8d94a6;--accent:#2b66d9;--on-accent:#fff}}
+:root[data-theme=light]{--bg:#f3f4f7;--panel:#fff;--panel2:#f6f7fa;--line:#e2e5ec;--fg:#181b23;--muted:#5e6678;--dim:#8d94a6;--accent:#2b66d9;--on-accent:#fff}
 *{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 var(--sans);padding:0 16px 48px;max-width:1280px;margin-inline:auto}
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
@@ -18,7 +19,7 @@ code{font:12.5px var(--mono);background:var(--panel2);padding:1px 5px;border-rad
 .hdr{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:18px 0 14px;flex-wrap:wrap}.hdr .sub{color:var(--muted);font-size:13px;margin-top:2px}.hdr-r{display:flex;align-items:center;gap:14px;font-size:12.5px;color:var(--muted);flex-wrap:wrap}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);display:inline-block;flex:none}.dot.pulse{animation:pulse 1.8s infinite}.dot.idle{background:var(--dim)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}
 @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(63,207,142,.45)}70%{box-shadow:0 0 0 7px rgba(63,207,142,0)}100%{box-shadow:0 0 0 0 rgba(63,207,142,0)}}
-button,.btn{font:inherit;font-size:13px;padding:6px 12px;border-radius:var(--r);border:1px solid var(--line);background:var(--panel);color:var(--fg);cursor:pointer;line-height:1.3}button:hover,.btn:hover{border-color:var(--accent);text-decoration:none}button.primary{background:var(--accent);border-color:var(--accent);color:#fff}button.mini,.btn.mini{font-size:12px;padding:3px 9px}
+button,.btn{font:inherit;font-size:13px;padding:6px 12px;border-radius:var(--r);border:1px solid var(--line);background:var(--panel);color:var(--fg);cursor:pointer;line-height:1.3}button:hover,.btn:hover{border-color:var(--accent);text-decoration:none}button.primary,.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:600}button.primary:hover,.btn.primary:hover{filter:brightness(1.08)}:focus-visible{outline:2px solid var(--accent);outline-offset:2px}button.mini,.btn.mini{font-size:12px;padding:3px 9px}
 input[type=text],input[type=password],input[type=search],textarea{font:inherit;font-size:13px;color:var(--fg);background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);padding:6px 9px}textarea{width:100%;font:12.5px/1.5 var(--mono);min-height:60vh;resize:vertical}
 .strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(138px,1fr));gap:8px;margin:0 0 14px}.tile{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:10px 12px;min-width:0}.tile .l{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;white-space:nowrap}.tile .v{font-size:22px;font-weight:600;line-height:1.2;margin-top:2px;font-variant-numeric:tabular-nums;white-space:nowrap}.tile .v small{font-size:12px;font-weight:400;color:var(--muted);margin-left:4px}.tile .s{font-size:12px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tile.warn .v{color:var(--warn)}.tile.bad .v{color:var(--bad)}.tile.ok .v{color:var(--ok)}.tile.accent .v{color:var(--accent)}.tile .meter{margin-top:6px}
 nav.tabs{display:flex;gap:2px;margin:0 0 14px;border-bottom:1px solid var(--line);overflow-x:auto}nav.tabs a{padding:8px 12px;color:var(--muted);font-size:13.5px;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}nav.tabs a:hover{color:var(--fg);text-decoration:none}nav.tabs a.active{color:var(--fg);border-bottom-color:var(--accent)}nav.tabs a .n{color:var(--dim);margin-left:5px;font-variant-numeric:tabular-nums}
@@ -30,7 +31,7 @@ nav.tabs{display:flex;gap:2px;margin:0 0 14px;border-bottom:1px solid var(--line
 .pill{display:inline-block;font-size:11.5px;line-height:1.6;padding:0 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap;vertical-align:middle}.pill.ok{color:var(--ok);border-color:var(--ok)}.pill.bad{color:var(--bad);border-color:var(--bad)}.pill.warn{color:var(--warn);border-color:var(--warn)}.pill.accent{color:var(--accent);border-color:var(--accent)}
 .chip{display:inline-block;font:10.5px/1.7 var(--mono);padding:0 5px;border-radius:4px;color:#fff;vertical-align:1px;margin-right:6px;min-width:16px;text-align:center}.chip.A{background:#3b6fd6}.chip.B{background:#2c9a6a}.chip.X{background:#8a5cc7}.chip.C{background:#d1652b}.chip.D{background:#c2417a}.chip.E{background:#1f8a8a}.chip.o{background:var(--dim)}
 .docs{list-style:none;margin:0;padding:0}.docs li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:8px 0;border-bottom:1px solid var(--line);align-items:baseline}.docs li:last-child{border-bottom:0}.docs .t{font-weight:500}.docs .s{grid-column:1;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.docs .m{grid-column:2;grid-row:1/3;font-size:12px;color:var(--muted);white-space:nowrap;text-align:right}
-.doc{max-width:860px}.doc .md h4{font-size:17px;margin:22px 0 8px}.doc .md h5{font-size:14.5px;margin:16px 0 6px}.doc .md p,.doc .md li{font-size:14px}.doc .md table{border-collapse:collapse;font-size:13px;margin:8px 0}.doc .md td,.doc .md th{border:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top}
+.doc{max-width:860px}.doc .md h4{font-size:17px;margin:22px 0 8px}.doc .md h5{font-size:14.5px;margin:16px 0 6px}.doc .md p,.doc .md li{font-size:14px}.doc .md table{border-collapse:collapse;font-size:13px;margin:8px 0}.doc .md td,.doc .md th{border:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top}.doc .md td.idea{min-width:230px}
 .tasks{list-style:none;margin:0;padding:0}.tasks li{border-bottom:1px solid var(--line)}.tasks li:last-child{border-bottom:0}.task{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:1px 10px;align-items:baseline;padding:7px 0;color:var(--fg)}.task:hover{text-decoration:none}.task:hover .t{color:var(--accent)}.task .t{grid-column:1/3;font-weight:500;line-height:1.35;overflow-wrap:anywhere}.task .k{grid-column:1;font:11.5px var(--mono);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task .m{grid-column:2;font-size:11.5px;color:var(--muted);text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.task .live{grid-column:1/3;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cols{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(236px,1fr))}.more{font-size:12px;color:var(--muted);padding-top:6px}.empty{color:var(--dim);font-size:13px;padding:6px 0}
 .scroll{overflow-x:auto}.tbl{width:100%;border-collapse:collapse;font-size:13px}.tbl th{text-align:left;font-weight:500;color:var(--muted);font-size:12px;padding:0 10px 6px 0;border-bottom:1px solid var(--line);white-space:nowrap}.tbl td{padding:7px 10px 7px 0;border-bottom:1px solid var(--line);vertical-align:middle;font-variant-numeric:tabular-nums}.tbl tr:last-child td{border-bottom:0}.tbl td.r,.tbl th.r{text-align:right;padding-right:0}.tbl td.prog{min-width:160px}
@@ -48,6 +49,15 @@ details.fold{margin-top:8px}details.fold summary{cursor:pointer;font-size:12.5px
 .banner{padding:10px 14px;border-radius:var(--r);margin-bottom:12px;font-size:13.5px;border:1px solid var(--line);background:var(--panel)}.banner.ok{border-color:var(--ok)}.banner.bad{border-color:var(--bad)}.banner.warn{border-color:var(--warn)}
 .row{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin:8px 0}.row label{font-size:12.5px;color:var(--muted)}
 .help{margin-top:16px;font-size:13px;color:var(--muted)}.help summary{cursor:pointer}.help ul{margin:8px 0 0 18px;padding:0}.help li{margin:4px 0}
+.narrow{max-width:760px}.act{display:inline-block;margin-top:6px;font-size:12px;white-space:nowrap}.doc .md td .act{display:block}
+.idea-q{font-size:15.5px;line-height:1.5;margin:0 0 12px;overflow-wrap:anywhere}.facts{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 16px;margin:0;font-size:13px}.facts dt{color:var(--muted)}.facts dd{margin:0;overflow-wrap:anywhere}@media(max-width:480px){.facts{grid-template-columns:1fr;gap:0}.facts dd{margin:0 0 8px}}
+.field{display:block;margin:14px 0 0}.field .lb{display:block;font-size:13px;font-weight:500;margin-bottom:4px}.field .hint{display:block;font-size:12px;color:var(--muted);margin-top:4px}.field .err{display:block;font-size:12.5px;color:var(--bad);margin-top:4px}.field input[type=text],.field input[type=password]{width:100%;max-width:340px}.field textarea.notes{min-height:96px;font:14px/1.5 var(--sans)}
+.choice{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:2px;font-size:13.5px}.choice label{display:inline-flex;gap:6px;align-items:center;cursor:pointer}
+.cta{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin-top:16px}.cta button.primary,.cta .btn.primary{font-size:14px;padding:9px 18px}
+.next{margin:6px 0 0;padding:0 0 0 18px;font-size:13px;color:var(--muted)}.next li{margin:3px 0}
+body.tok .tokfield{display:none}.tokswap{display:none;font-size:12px;color:var(--muted)}body.tok .tokswap{display:inline}
+.steps{display:flex;list-style:none;margin:2px 0 0;padding:0;font-size:12px;color:var(--dim)}.steps li{flex:1 1 0;min-width:0;position:relative;text-align:center;padding-top:27px;line-height:1.3}.steps li:before{content:"";position:absolute;top:9px;left:-50%;width:100%;height:2px;background:var(--line)}.steps li:first-child:before{display:none}.steps li i{position:absolute;top:0;left:50%;margin-left:-10px;width:20px;height:20px;border-radius:50%;border:2px solid var(--line);background:var(--panel);font:600 11px/16px var(--sans);color:var(--dim);z-index:1}
+.steps li.done{color:var(--muted)}.steps li.done i{border-color:var(--ok);color:var(--ok)}.steps li.done:before,.steps li.now:before{background:var(--ok)}.steps li.now{color:var(--fg);font-weight:600}.steps li.now i{border-color:var(--accent);background:var(--accent);color:var(--on-accent)}.steps li.bad{color:var(--bad);font-weight:600}.steps li.bad i{border-color:var(--bad);color:var(--bad)}
 footer{margin-top:20px;color:var(--dim);font-size:12px;display:flex;gap:14px;flex-wrap:wrap}
 .days .d{display:grid;grid-template-columns:82px 1fr 64px 44px;gap:10px;align-items:center;font-size:12.5px;color:var(--muted);padding:3px 0}.days .d .meter{height:10px}.days .d b{color:var(--fg);text-align:right;font-weight:500;font-variant-numeric:tabular-nums}
 .checks{list-style:none;margin:8px 0 0;padding:0}.checks li{padding:4px 0 4px 22px;position:relative;border-bottom:1px solid var(--line);font-size:13px}.checks li:before{content:"";position:absolute;left:2px;top:9px;width:11px;height:11px;border:1px solid var(--muted);border-radius:3px}.checks li:last-child{border-bottom:0}
@@ -75,7 +85,7 @@ setInterval(tick,20000);
 var log=document.getElementById('log-list');if(log){var kinds=[].slice.call(document.querySelectorAll('#log-filters input[data-kind]')),q=document.getElementById('log-q');
 function apply(){var on={};kinds.forEach(function(c){on[c.getAttribute('data-kind')]=c.checked;c.parentNode.classList.toggle('on',c.checked)});var text=(q&&q.value||'').toLowerCase();var n=0;[].forEach.call(log.querySelectorAll('li[data-kind]'),function(li){var ok=on[li.getAttribute('data-kind')]!==false&&(!text||li.textContent.toLowerCase().indexOf(text)>=0);li.style.display=ok?'':'none';if(ok)n++});[].forEach.call(log.querySelectorAll('li.evt-h'),function(h){var any=false,e=h.nextElementSibling;while(e&&!e.classList.contains('evt-h')){if(e.style.display!=='none')any=true;e=e.nextElementSibling}h.style.display=any?'':'none'});var c=document.getElementById('log-count');if(c)c.textContent=n+' shown'}
 kinds.forEach(function(c){c.addEventListener('change',apply)});if(q)q.addEventListener('input',apply);
-var pre={all:null,verdicts:['task.accept','task.reject','run','tasks.create','task.patch','needs-human','goals.edit','manager.wake','goal.paused','pace.set'],workers:['task.claim','task.submit','task.fail','task.release','lease.expired','task.blocked']};
+var pre={all:null,verdicts:['task.accept','task.reject','run','tasks.create','task.patch','needs-human','goals.edit','manager.wake','goal.paused','pace.set','project.approve','project.update'],workers:['task.claim','task.submit','task.fail','task.release','lease.expired','task.blocked']};
 [].forEach.call(document.querySelectorAll('[data-preset]'),function(a){a.addEventListener('click',function(e){e.preventDefault();var p=pre[a.getAttribute('data-preset')];kinds.forEach(function(c){c.checked=!p||p.indexOf(c.getAttribute('data-kind'))>=0});apply()})});apply()}
 })();`;
 /** Poll the task's live fragment every 15 s; when the task leaves claimed/running, reload once to show the deliverable and reviews. */
@@ -155,7 +165,9 @@ const KIND_LABEL: Record<string, [string, string]> = {
   "manager.wake": ["wake", ""],
   "goals.edit": ["goals edited", "accent"],
   "doc.update": ["brief updated", "ok"],
-  "doc.delete": ["brief deleted", "warn"]
+  "doc.delete": ["brief deleted", "warn"],
+  "project.approve": ["idea approved", "accent"],
+  "project.update": ["project", "accent"]
 };
 const kindLabel = (kind: string) => KIND_LABEL[kind]?.[0] ?? kind;
 const kindCls = (kind: string) => KIND_LABEL[kind]?.[1] ?? "";
@@ -176,8 +188,46 @@ const eventList = (events: EventRow[]) => {
   return out;
 };
 
-/** Minimal markdown for goal bodies: headings, bullet lists, code spans, bold, bare links. Input is escaped first. */
-function md(text: string): string {
+// ---- projects ----
+const PROJECTS_REPO = "https://github.com/yukewF2023/projects";
+/** Status → [label, pill colour]. The label always carries the meaning; colour only repeats it. */
+const PROJECT_STATE: Record<ProjectStatus, [string, string]> = {
+  approved: ["waiting for the builder", ""],
+  building: ["building", "accent"],
+  ready: ["ready to review", "warn"],
+  active: ["running in Cowork", "accent"],
+  done: ["done", "ok"],
+  dropped: ["dropped", ""],
+  failed: ["build failed", "bad"]
+};
+const projectPill = (status: ProjectStatus, prefix = "") => `<span class="pill ${PROJECT_STATE[status]?.[1] ?? ""}">${esc(prefix)}${esc(PROJECT_STATE[status]?.[0] ?? status)}</span>`;
+const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
+/** "P3 · signal-demo-outreach" once the builder named the folder; before that, the idea's own name (the text before its first colon). */
+const projectName = (p: Pick<ProjectSummary, "id" | "slug" | "idea">) => `P${p.id} · ${p.slug ?? clip(p.idea.split(":")[0], 56)}`;
+/** The approved idea as a card: the idea text, then the row's other columns. */
+const ideaCard = (idea: string, cells: Record<string, string>) => {
+  const facts = Object.entries(cells).filter(([h, v]) => v && !["#", "idea", "status"].includes(h.toLowerCase()));
+  return `<p class="idea-q">${esc(idea)}</p>${facts.length ? `<dl class="facts">${facts.map(([h, v]) => `<dt>${esc(h)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>` : ""}`;
+};
+/** The board token as a form field. With a remembered token the script hides the field and offers "use another token". */
+const tokenField = (error?: string | null) =>
+  `<label class="field tokfield"${error ? " data-token-error" : ""}><span class="lb">Board token</span><input type="password" name="token" autocomplete="current-password" required${error ? ' aria-invalid="true"' : ""}>${error ? `<span class="err" role="alert">${esc(error)}</span>` : `<span class="hint">The manager's ORCHESTRATOR_TOKEN. This browser remembers it after the first use.</span>`}</label>`;
+const TOKEN_SWAP = `<a href="#" class="tokswap" data-tokswap>use another board token</a>`;
+/** Project forms: remember the board token per browser, hide the field once remembered, stop double submits, drop the one-time ?flash from the URL. */
+const PROJECT_JS = `(function(){var b=document.body;b.className+=' js';var saved=null;try{saved=localStorage.getItem('board_token')}catch(e){}
+var inputs=[].slice.call(document.querySelectorAll('input[name=token]')),bad=document.querySelector('[data-token-error]');
+if(bad){try{localStorage.removeItem('board_token')}catch(e){}}else if(saved){inputs.forEach(function(i){i.value=saved});b.className+=' tok'}
+[].forEach.call(document.querySelectorAll('[data-tokswap]'),function(a){a.addEventListener('click',function(e){e.preventDefault();b.className=b.className.replace(' tok','');inputs.forEach(function(i){i.value=''});if(inputs[0])inputs[0].focus()})});
+[].forEach.call(document.querySelectorAll('form[data-tok]'),function(f){f.addEventListener('submit',function(){var t=f.querySelector('input[name=token]');try{if(t&&t.value)localStorage.setItem('board_token',t.value)}catch(e){}setTimeout(function(){[].forEach.call(f.querySelectorAll('button'),function(x){x.disabled=true})},0)})});
+window.addEventListener('pageshow',function(){[].forEach.call(document.querySelectorAll('form[data-tok] button'),function(x){x.disabled=false})});
+if(location.search.indexOf('flash=')>=0&&history.replaceState)history.replaceState(null,'',location.pathname);
+})();`;
+
+/**
+ * Minimal markdown for goal bodies and briefs: headings, bullet lists, pipe tables, code spans, bold, bare links. Input is escaped first.
+ * `rowExtra(table, index)` returns HTML appended to the Idea cell of each row of a table that has an "Idea" column, numbered as in ideaRows().
+ */
+function md(text: string, rowExtra?: (table: number, index: number) => string): string {
   const inline = (s: string) =>
     s
       .replace(/`([^`]+)`/g, "<code>$1</code>")
@@ -199,10 +249,13 @@ function md(text: string): string {
     }
   };
   let table: string[][] = [];
+  let ideaTables = 0;
   const endTable = () => {
     if (table.length) {
       const [head, ...rows] = table;
-      out += `<table><tr>${head.map((c) => `<th>${inline(c)}</th>`).join("")}</tr>${rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</table>`;
+      const col = rowExtra ? ideaColumn(head) : -1;
+      if (col >= 0) ideaTables++;
+      out += `<div class="scroll"><table><tr>${head.map((c) => `<th>${inline(c)}</th>`).join("")}</tr>${rows.map((r, i) => `<tr>${r.map((c, j) => (j === col ? `<td class="idea">${inline(c)}${rowExtra!(ideaTables, i + 1)}</td>` : `<td>${inline(c)}</td>`)).join("")}</tr>`).join("")}</table></div>`;
       table = [];
     }
   };
@@ -346,6 +399,10 @@ function attention(s: BoardStatus, now: number): string {
   const alert = (cls: string, html: string) => items.push(`<div class="alert"><span class="dot ${cls}"></span><span>${html}</span></div>`);
   for (const n of s.needsHuman) alert("bad", `<span class="dim small">${when(n.ts)}</span> ${esc(n.text)}`);
   for (const t of s.blocked) alert("bad", `Blocked: <a href="/tasks/${t.id}">${esc(t.title)}</a> <span class="mono muted">${esc(t.key)}</span> · ${esc(t.last_error ?? "")}`);
+  for (const pr of s.projects) {
+    if (pr.status === "ready") alert("warn", `Project <a href="/projects/${pr.id}">${esc(projectName(pr))}</a> is ready for your review${pr.pr_url ? ` · <a href="${esc(pr.pr_url)}" rel="noopener">pull request ↗</a>` : ""}`);
+    if (pr.status === "failed") alert("bad", `Project <a href="/projects/${pr.id}">${esc(projectName(pr))}</a>: the build failed · ${esc(pr.note ?? "")}`);
+  }
   for (const w of s.workers) if (now - w.last_seen > 15 * 60_000) alert("bad", `${esc(workerName(w.id))} is offline (last seen ${ago(w.last_seen, now)})`);
   if (s.spend.pacing) alert("warn", `Workers paused: ${esc(s.spend.pacing.reason)}`);
   if (!s.manager.lockedUntil && s.manager.lastRunAt && now - s.manager.lastRunAt > 90 * 60_000) alert("warn", `The manager has not run for ${ago(s.manager.lastRunAt, now).replace(" ago", "")}; check the routine`);
@@ -416,7 +473,26 @@ export function renderStatusPage(s: BoardStatus, now: number): string {
     : `<tr><td colspan="8" class="empty">no goals yet — the manager syncs GOALS.md on its next run</td></tr>`;
   const goalsTable = `<div class="scroll"><table class="tbl"><tr><th>goal</th><th>progress</th><th class="r">ready</th><th class="r">running</th><th class="r">review</th><th class="r">accepted</th><th class="r">blocked</th><th class="r" title="cancelled or rejected for good">dropped</th></tr>${goalRows}</table></div>`;
 
-  const nav = `<nav class="tabs"><a href="#overview">Overview</a><a href="#briefs">Briefs<span class="n">${s.docs.length}</span></a><a href="#pipeline">Pipeline<span class="n">${readyActive} · ${inProgress} · ${c("review")}</span></a><a href="#agents">Agents<span class="n">${s.workers.length + 1}</span></a><a href="#goals">Goals<span class="n">${s.goals.length}</span></a><a href="#activity">Activity</a><a href="#budget">Budget<span class="n">${usd(sp.todayUsd)}</span></a></nav>`;
+  // ---- projects: approved ideas, grouped by whose turn it is ----
+  const projectsWaiting = s.projects.filter((x) => x.status === "ready" || x.status === "failed");
+  const projectsWorking = s.projects.filter((x) => ["approved", "building", "active"].includes(x.status));
+  const projectsFinished = s.projects.filter((x) => x.status === "done" || x.status === "dropped");
+  const needsYou = s.needsHuman.length + s.blocked.length + projectsWaiting.length;
+  const projectHint = (x: ProjectSummary) =>
+    x.status === "ready" ? "Review the pull request, then merge" : x.status === "failed" ? `Build failed: ${x.note ?? "open it to try again"}` : x.status === "active" ? "Running in Cowork · record the result when it finishes" : x.status === "approved" || x.status === "building" ? (x.note ?? "the builder is on it") : (x.result ?? "no result recorded");
+  const projectList = (list: ProjectSummary[]) =>
+    `<ul class="docs">${list.map((x) => `<li><a class="t" href="/projects/${x.id}">${esc(projectName(x))}</a><span class="s">${esc(projectHint(x))} · ${esc(clip(x.idea, 120))}</span><span class="m">${projectPill(x.status)}<br>${ago(x.updated_at, now)}</span></li>`).join("")}</ul>`;
+  const ideaBanks = s.docs.filter((d) => d.id.startsWith("ideas-"));
+  const bankLinks = ideaBanks.length ? ideaBanks.map((d) => `<a href="/docs/${esc(d.id)}">${esc(d.title.replace(/^DeepSpace /, ""))}</a>`).join(" · ") : "an idea bank under Briefs";
+  const projectsTab = `<section class="tab" id="projects"><h2 class="tabtitle">Projects</h2>
+${s.projects.length ? "" : `<div class="panel"><div class="ph"><h2>No projects yet</h2></div><p style="margin:0">A project starts from an idea you approve. Open ${bankLinks}, find an idea worth running, and choose <b>Approve →</b> on its row.</p></div>`}
+${projectsWaiting.length ? `<div class="panel"><div class="ph"><h2>Waiting for you</h2><span class="r num">${projectsWaiting.length}</span></div>${projectList(projectsWaiting)}</div>` : ""}
+${projectsWorking.length ? `<div class="panel"><div class="ph"><h2>In progress</h2><span class="r num">${projectsWorking.length}</span></div>${projectList(projectsWorking)}</div>` : ""}
+${projectsFinished.length ? `<div class="panel"><details${projectsWaiting.length + projectsWorking.length ? "" : " open"}><summary style="cursor:pointer"><h2 style="display:inline">Finished</h2> <span class="muted small">${projectsFinished.length}</span></summary><div style="margin-top:8px">${projectList(projectsFinished)}</div></details></div>` : ""}
+<p class="muted small" style="margin:10px 0 0">Approve an idea in an idea bank (${bankLinks}) → the builder, a Claude Opus 5.5 routine, writes a project folder with one workstream per parallel Cowork session and opens a pull request in the <a href="${PROJECTS_REPO}" rel="noopener">projects</a> repository → you merge and set up the Cowork project → you record the result here, and the manager marks the idea tested or dropped in its bank.</p>
+</section>`;
+
+  const nav = `<nav class="tabs"><a href="#overview">Overview</a><a href="#briefs">Briefs<span class="n">${s.docs.length}</span></a><a href="#projects">Projects<span class="n">${projectsWaiting.length + projectsWorking.length}</span></a><a href="#pipeline">Pipeline<span class="n">${readyActive} · ${inProgress} · ${c("review")}</span></a><a href="#agents">Agents<span class="n">${s.workers.length + 1}</span></a><a href="#goals">Goals<span class="n">${s.goals.length}</span></a><a href="#activity">Activity</a><a href="#budget">Budget<span class="n">${usd(sp.todayUsd)}</span></a></nav>`;
 
   const docList = (full: boolean) =>
     s.docs.length
@@ -429,13 +505,14 @@ export function renderStatusPage(s: BoardStatus, now: number): string {
 <div class="panel"><div class="ph"><h2>Briefs for you</h2><span class="r">maintained by the manager, rewritten in place · <a href="#briefs">all briefs</a></span></div>${docList(false)}</div>
 <div class="two">
   <div class="panel"><div class="ph"><h2>Agents</h2><span class="r">live · <a href="#agents">details</a></span></div><div id="agents-live">${renderAgents(s, now)}</div><div style="margin-top:10px">${managerCard(s, now)}</div></div>
-  <div class="panel"><div class="ph"><h2>Needs attention</h2><span class="r">${s.needsHuman.length + s.blocked.length ? `${s.needsHuman.length + s.blocked.length} item${s.needsHuman.length + s.blocked.length === 1 ? "" : "s"}` : "all clear"}</span></div>${attention(s, now)}
+  <div class="panel"><div class="ph"><h2>Needs attention</h2><span class="r">${needsYou ? `${needsYou} item${needsYou === 1 ? "" : "s"}` : "all clear"}</span></div>${attention(s, now)}
   <h3>Recent activity</h3><ul class="evt">${s.events.slice(0, 8).map(eventLi).join("") || `<li class="empty">nothing yet</li>`}</ul><div class="more"><a href="#activity">full activity log</a></div></div>
 </div>
 <div class="panel"><div class="ph"><h2>Goals</h2><span class="r"><a href="#goals">bodies</a> · <a href="/goals">edit</a></span></div>${goalsTable}</div>
 <details class="help"><summary>How this board works, and where to look</summary><ul>
 <li><b>The loop.</b> You write goals in GOALS.md (the <a href="/goals">editor</a> commits it). The manager, a scheduled Claude routine, turns them into tasks with acceptance criteria, keeps the queue stocked, and reviews every deliverable by running its tests: accept, send back with notes, or split. Two DeepSeek workers on a small VM pull tasks continuously, paced by the OpenCode Go allowance. Sessions are disposable; this board is the memory.</li>
 <li><b>Pipeline</b> lists every task by stage; <b>Agents</b> shows what each worker is doing step by step (refreshed every 20 s) and the manager's last run; <b>Goals</b> has the goal bodies and progress; <b>Activity</b> is everything that happened, filterable; <b>Budget</b> is spend against the Go windows and the Cloudflare free tier.</li>
+<li><b>Projects</b>: an idea you approve in an idea bank becomes a project. The builder (Claude Opus 5.5) writes its folder and opens a pull request; you merge, run it in Cowork, and record the result.</li>
 <li><b>One task</b>: click it for the spec, the acceptance checklist, the live session while it runs, every review verdict, the report and the files.</li>
 <li><b>Manager runs</b> are full session transcripts on claude.ai: <a href="${ROUTINE_13}" rel="noopener">:13</a> and <a href="${ROUTINE_43}" rel="noopener">:43</a> (owner login). Every push to <code>main</code> also starts a run within about a minute; the Wake button does the same once its trigger is configured (manager/ROUTINE.md).</li>
 <li><b>Worker transcripts</b>: the opencode web UI on the VM through an SSH tunnel (worker/README.md), or a transcript link on the task page when session sharing is on.</li>
@@ -520,6 +597,7 @@ ${strip}
 ${nav}
 ${overview}
 ${briefs}
+${projectsTab}
 ${pipeline}
 ${agents}
 ${goalsTab}
@@ -611,18 +689,130 @@ ${banner}${setup}
   return shell("Goals editor · Agent board", body, null);
 }
 
-/** /docs/<id> — a manager-maintained brief, rendered from markdown, with its change log. */
-export function renderDocPage(d: DocRow, now: number, others: { id: string; title: string }[] = []): string {
+/**
+ * /docs/<id> — a manager-maintained brief, rendered from markdown, with its change log. In an idea bank every row ends with
+ * "Approve →" (or the status of the project it already became).
+ */
+export function renderDocPage(d: DocRow, now: number, others: { id: string; title: string }[] = [], projects: Project[] = []): string {
   const siblings = others.filter((o) => o.id !== d.id);
+  const rows = new Map(ideaRows(d.body).map((r) => [r.ref, r]));
+  const rowExtra = (table: number, index: number) => {
+    const r = rows.get(`${table}.${index}`);
+    if (!r) return "";
+    const tagged = /\(P(\d+)\)/.exec(r.cells.Status ?? "");
+    const p = projects.find((x) => x.idea === r.idea && x.status !== "dropped") ?? (tagged ? projects.find((x) => x.id === Number(tagged[1])) : undefined);
+    return p
+      ? `<a class="act" href="/projects/${p.id}" title="this idea is project P${p.id}">${projectPill(p.status, `P${p.id} · `)}</a>`
+      : `<a class="act" href="/projects/new?doc=${encodeURIComponent(d.id)}&amp;row=${r.ref}&amp;v=${d.version}" title="turn this idea into a project">Approve →</a>`;
+  };
+  const approveHint = rows.size
+    ? `<p class="muted small" style="margin:0 0 10px">Like an idea? <b>Approve →</b> on its row turns it into a project: the builder writes a project folder with parallel workstreams and opens a pull request for you to review. <a href="/#projects">Your projects</a></p>`
+    : "";
   const body = `
 <header class="hdr"><div><div class="sub"><a href="/">← board</a> · <a href="/#briefs">briefs</a>${siblings.length ? ` · ${siblings.map((o) => `<a href="/docs/${esc(o.id)}">${esc(o.title.replace(/^DeepSpace /, ""))}</a>`).join(" · ")}` : ""}</div><h1>${esc(d.title)}</h1><div class="sub">version ${d.version} · updated ${ago(d.updated_at, now)} (${when(d.updated_at)}) · ${Math.round(d.bytes / 1024)} KB${d.note ? ` · ${esc(d.note)}` : ""}</div></div><div class="hdr-r"><a href="/docs/${esc(d.id)}.md">markdown</a><a href="/api/docs/${esc(d.id)}">JSON</a></div></header>
-<div class="panel doc"><div class="md">${md(d.body)}</div></div>
+<div class="panel doc">${approveHint}<div class="md">${md(d.body, rows.size ? rowExtra : undefined)}</div></div>
 <div class="panel"><div class="ph"><h2>Changes</h2><span class="r">the manager rewrites this brief in place after reviewing new memos; this is its change log</span></div><ul class="evt">${d.log
   .slice()
   .reverse()
   .map((l) => `<li><time title="${when(l.ts)}">${when(l.ts).slice(5, 16)}</time><span><span class="kind">v${l.version}</span>${esc(l.note ?? "no note")}<span class="who">${Math.round(l.bytes / 1024)} KB</span></span></li>`)
   .join("") || `<li class="empty">no changes recorded</li>`}</ul></div>`;
   return shell(`${d.title} · Agent board`, body, null);
+}
+
+/** /projects/new — confirm one idea before it becomes a project. One decision on the page; `row: null` means the bank changed under the link. */
+export function renderApprovePage(d: { doc: Pick<DocRow, "id" | "title" | "version">; row: IdeaRow | null; builderReady: boolean; notes?: string; error?: string }): string {
+  const bank = `/docs/${esc(d.doc.id)}`;
+  const head = `<header class="hdr"><div><div class="sub"><a href="/">← board</a> · <a href="${bank}">${esc(d.doc.title.replace(/^DeepSpace /, ""))}</a></div><h1>Approve this idea</h1><div class="sub">${d.row ? `from ${esc(d.doc.title)}, version ${d.doc.version}` : "the idea bank changed"}</div></div></header>`;
+  if (!d.row)
+    return shell(
+      "Approve an idea · Agent board",
+      `${head}<div class="narrow"><div class="banner warn" role="alert">The manager rewrote this idea bank after you opened it, so the row you chose has moved or changed. Nothing was approved.</div><div class="cta"><a class="btn primary" href="${bank}">Back to the idea bank</a></div></div>`,
+      null
+    );
+  const tokenError = d.error && /token/i.test(d.error) ? d.error : null;
+  const body = `${head}
+<div class="narrow">
+${d.error && !tokenError ? `<div class="banner bad" role="alert">Not approved: ${esc(d.error)}</div>` : ""}
+${d.builderReady ? "" : `<div class="banner warn">The board cannot start the builder by itself yet (its trigger is not configured). Approving records the project; the builder then has to be run by hand. Setup is in <code>docs/PROJECTS.md</code>.</div>`}
+<div class="panel"><div class="ph"><h2>The idea</h2><span class="r">row ${esc(d.row.cells["#"] || String(d.row.index))}${d.row.cells.Status ? ` · ${esc(d.row.cells.Status)}` : ""}</span></div>${ideaCard(d.row.idea, d.row.cells)}</div>
+<div class="panel">
+<form method="post" action="/projects" data-tok>
+<input type="hidden" name="action" value="approve"><input type="hidden" name="doc" value="${esc(d.doc.id)}"><input type="hidden" name="row" value="${esc(d.row.ref)}"><input type="hidden" name="idea" value="${esc(d.row.idea)}">
+<label class="field" style="margin-top:0"><span class="lb">Notes for the builder <span class="muted" style="font-weight:400">(optional)</span></span><textarea class="notes" name="notes" maxlength="2000" placeholder="Anything the idea does not say: constraints, who is involved, accounts you already have, what to skip.">${esc(d.notes ?? "")}</textarea><span class="hint">The builder follows these over its own defaults. Notes are public, like everything on this board.</span></label>
+${tokenField(tokenError)}
+<h3>What happens next</h3>
+<ol class="next"><li>The builder (Claude Opus 5.5) reads the idea, the memos behind it and the goal's brief, then writes a project folder: a specification and one workstream per parallel Cowork session.</li><li>It opens a pull request in the projects repository. This board lists it under “Needs attention”.</li><li>You read its assumptions, merge, and set up the Cowork project from the folder's <code>cowork/SETUP.md</code>.</li></ol>
+<div class="cta"><button class="primary">Approve and build</button><a href="${bank}">Back to the idea bank</a>${TOKEN_SWAP}</div>
+</form></div>
+</div><script>${PROJECT_JS}</script>`;
+  return shell("Approve an idea · Agent board", body, null);
+}
+
+const PROJECT_STEPS = ["Approved", "Building", "Review", "Running", "Done"];
+const STEP_OF: Record<ProjectStatus, number> = { approved: 0, building: 1, ready: 2, active: 3, done: 4, dropped: 0, failed: 1 };
+/** Where the project stands: steps passed are ticked, the current one is filled, a failed build is marked on its step. */
+function projectSteps(p: Project): string {
+  const reached = p.status === "dropped" ? Math.max(0, ...p.log.filter((l) => l.status !== "dropped" && l.status !== "failed").map((l) => STEP_OF[l.status] ?? 0)) : STEP_OF[p.status];
+  return `<ol class="steps" aria-label="project progress">${PROJECT_STEPS.map((label, i) => {
+    const cls = p.status === "done" || i < reached || (p.status === "dropped" && i === reached) ? "done" : i > reached ? "" : p.status === "failed" ? "bad" : p.status === "dropped" ? "done" : "now";
+    return `<li class="${cls}"${cls === "now" || cls === "bad" ? ' aria-current="step"' : ""}><i aria-hidden="true">${cls === "done" ? "✓" : cls === "bad" ? "!" : i + 1}</i>${cls === "bad" ? "Build failed" : label}</li>`;
+  }).join("")}</ol>`;
+}
+
+/** /projects/<id> — one approved idea: where it stands, the one thing to do next, the idea as approved, and its history. */
+export function renderProjectPage(p: Project, now: number, o: { builderReady: boolean; bankTitle: string; flash?: string | null; error?: string | null }): string {
+  const tokenError = o.error && /token/i.test(o.error) ? o.error : null;
+  const form = (action: string, inner: string) => `<form method="post" action="/projects" data-tok><input type="hidden" name="action" value="${action}"><input type="hidden" name="id" value="${p.id}">${inner}</form>`;
+  const run = p.session_url ? `<a href="${esc(p.session_url)}" rel="noopener">Open the builder's run ↗</a>` : "";
+  const byHand = `<p class="muted small" style="margin:8px 0 0">To run the builder by hand: in your clone of the <a href="${PROJECTS_REPO}" rel="noopener">projects</a> repository, <code>claude -p "Read builder/PROMPT.md and follow it." --model claude-opus-5-5</code> with <code>ORCHESTRATOR_TOKEN</code> set.</p>`;
+  const flash: Record<string, string> = {
+    approved: "Approved. This project now has its own page; the status below shows whether the builder has started.",
+    already: "This idea already has a project. Nothing new was started.",
+    rebuild: "Build requested.",
+    merged: "Marked as merged. When the Cowork project reaches its result, record it here.",
+    result: "Result recorded. The manager updates the idea's row in the bank on its next run."
+  };
+  const banner = o.error && !tokenError ? `<div class="banner bad" role="alert">${esc(o.error)}</div>` : o.flash && flash[o.flash] ? `<div class="banner ok" role="status">${esc(flash[o.flash])}</div>` : "";
+  const resultForm = (outcome: "choose" | "dropped", button: string, primary: boolean) =>
+    form(
+      "result",
+      `${outcome === "choose" ? `<div class="field" style="margin-top:0"><span class="lb" id="outcome-l">How did it go?</span><div class="choice" role="radiogroup" aria-labelledby="outcome-l"><label><input type="radio" name="outcome" value="done" checked> It ran: record the result</label><label><input type="radio" name="outcome" value="dropped"> Dropped before a result</label></div></div>` : `<input type="hidden" name="outcome" value="dropped">`}
+<label class="field"><span class="lb">${outcome === "choose" ? "The result in one line" : "Why, in one line"}</span><input type="text" name="result" maxlength="300" required style="max-width:none" placeholder="${outcome === "choose" ? "e.g. 10 sends, 3 replies in 14 days: keep, widen to agencies" : "e.g. overlaps with P2"}"><span class="hint">Goes into the idea's row in the bank, so write it for someone reading the bank later.</span></label>
+${tokenField(tokenError)}<div class="cta"><button${primary ? ' class="primary"' : ""}>${button}</button>${TOKEN_SWAP}</div>`
+    );
+  let next = "";
+  if (p.status === "approved")
+    next = `<p style="margin:0">${o.builderReady ? "The builder has been asked to start. It picks this project up from the board, writes the folder and opens a pull request." : "The board cannot start the builder by itself yet: its trigger is not configured (<code>docs/PROJECTS.md</code>)."} ${run}</p>${p.note ? `<p class="muted small" style="margin:6px 0 0">${esc(p.note)}</p>` : ""}${o.builderReady ? "" : byHand}
+${form("rebuild", `${tokenField(tokenError)}<div class="cta"><button${o.builderReady && !p.session_url ? ' class="primary"' : ""}>Start the builder</button>${TOKEN_SWAP}</div>`)}`;
+  else if (p.status === "building")
+    next = `<p style="margin:0">The builder is writing the project folder. This page refreshes by itself. ${run}</p>
+<details class="fold"><summary>Stuck for more than half an hour?</summary>${form("rebuild", `${tokenField(tokenError)}<div class="cta"><button>Start the builder again</button>${TOKEN_SWAP}</div>`)}</details>`;
+  else if (p.status === "ready")
+    next = `<p style="margin:0">The project folder${p.slug ? ` <code>${esc(p.slug)}/</code>` : ""} is waiting in a pull request. Read the assumptions at the top, change what is wrong, and merge.${p.note ? ` <span class="muted">(${esc(p.note)})</span>` : ""}</p>
+<div class="cta">${p.pr_url ? `<a class="btn primary" href="${esc(p.pr_url)}" rel="noopener">Review the pull request ↗</a>` : `<span class="muted">The builder recorded no link; look for the branch in the <a href="${PROJECTS_REPO}/pulls" rel="noopener">projects repository</a>.</span>`}${run}</div>
+<h3>After merging</h3><ol class="next"><li>Pull the projects repository and open <code>${esc(p.slug ?? "<slug>")}/cowork/SETUP.md</code>.</li><li>Create the Cowork project from that folder and open one session per workstream.</li><li>Tell the board, so this page moves on:</li></ol>
+${form("merged", `${tokenField(tokenError)}<div class="cta"><button>I merged it</button>${TOKEN_SWAP}</div>`)}`;
+  else if (p.status === "active") next = `<p style="margin:0 0 4px">Running in Cowork${p.slug ? ` from <code>${esc(p.slug)}/</code>` : ""}. When it reaches the decision rule in its <code>RESULT.md</code>, record the outcome here.</p>${resultForm("choose", "Record the result", true)}`;
+  else if (p.status === "failed")
+    next = `<div class="banner bad" style="margin:0 0 4px">${esc(p.note ?? "The builder stopped without saying why.")}</div><p class="muted small" style="margin:6px 0 0">${run}</p>${o.builderReady ? "" : byHand}
+${form("rebuild", `${tokenField(tokenError)}<div class="cta"><button class="primary">Build again</button>${TOKEN_SWAP}</div>`)}`;
+  else next = `<p style="margin:0"><b>${p.status === "done" ? "Result" : "Dropped"}:</b> ${esc(p.result ?? "no result recorded")}</p><p class="muted small" style="margin:6px 0 0">The manager copies this into the idea's row the next time it rewrites the bank.</p>`;
+  const drop = ["approved", "building", "ready", "failed"].includes(p.status) ? `<details class="fold"><summary>Drop this project</summary>${resultForm("dropped", "Drop the project", false)}</details>` : "";
+  const nextTitle: Record<ProjectStatus, string> = { approved: "Waiting for the builder", building: "The builder is working", ready: "Your turn: review the pull request", active: "Your turn when it finishes", done: "Finished", dropped: "Dropped", failed: "The build failed" };
+  const body = `
+<header class="hdr"><div><div class="sub"><a href="/">← board</a> · <a href="/#projects">projects</a> · <a href="/docs/${esc(p.doc_id)}">${esc(o.bankTitle.replace(/^DeepSpace /, ""))}</a></div><h1>${esc(projectName(p))}</h1><div class="sub">${projectPill(p.status)} approved ${ago(p.created_at, now)} · updated ${ago(p.updated_at, now)}</div></div><div class="hdr-r"><a href="/api/projects/${p.id}">JSON</a></div></header>
+<div class="narrow">
+${banner}
+<div class="panel">${projectSteps(p)}</div>
+<div class="panel"><div class="ph"><h2>${nextTitle[p.status]}</h2></div>${next}${drop}</div>
+<div class="panel"><div class="ph"><h2>The idea, as approved</h2><span class="r">${esc(p.doc_id)} v${p.doc_version}</span></div>${ideaCard(p.idea, p.row)}${p.notes ? `<h3>Your notes for the builder</h3><p style="margin:0;white-space:pre-wrap">${esc(p.notes)}</p>` : ""}</div>
+<div class="panel"><div class="ph"><h2>History</h2><span class="r">times in UTC</span></div><ul class="evt">${p.log
+    .slice()
+    .reverse()
+    .map((l) => `<li style="grid-template-columns:86px minmax(0,1fr)"><time title="${when(l.ts)}">${when(l.ts).slice(5, 16)}</time><span><span class="kind ${PROJECT_STATE[l.status]?.[1] ?? ""}">${esc(PROJECT_STATE[l.status]?.[0] ?? l.status)}</span>${esc(l.text)}<span class="who">${esc(l.actor)}</span></span></li>`)
+    .join("") || `<li class="empty">nothing yet</li>`}</ul></div>
+</div><script>${PROJECT_JS}</script>`;
+  return shell(`${projectName(p)} · Agent board`, body, !o.error && (p.status === "building" || (p.status === "approved" && Boolean(p.session_url))) ? 30 : null);
 }
 
 /** Result of the wake button (plain page so it works without JS). */
