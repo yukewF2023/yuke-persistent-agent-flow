@@ -31,7 +31,15 @@
 - Manager prompt: a row with a project is pinned in its bank and its Status is set from the project (`queued (P<id>)`, `tested (P<id>): …`, `dropped (P<id>): …`).
 - Verified locally only: `scripts/smoke.sh` (108 checks) and the pages in the browser preview at phone and desktop widths. Not yet done: create the repository and the routine, set the two builder secrets, deploy, and one end-to-end run from an approve click.
 
+## 2026-10-02 (later): the board is private; people use the agent-board app
+- The Worker has no pages and no public routes any more (`src/pages.ts` is gone). `GET /api/*` needs the app's or the manager's token; `/app/*` (new, `APP_TOKEN`) carries what the owner does: approve an idea, act on a project, read and save GOALS.md, wake the manager. Everything else answers a bare 404.
+- The human side is the DeepSpace app `agent-board` (repository `../agent-board`, https://agent-board.app.space): DeepSpace sign-in, then an owner check on every call, because anyone can sign in to a DeepSpace app. The app's worker holds `APP_TOKEN` as a secret and adds the signed-in email as `who`. Same screens and look as the old pages, without token fields. Details in docs/PROJECTS.md.
+- Scripts that read the board send the manager token now: `scripts/board.sh status|raw|workers`, `scripts/monitor.sh`, and `builder/board.sh` in the projects repository.
+- Order of the switch: deploy the Worker with `/app/*` while its pages still exist, deploy the app and check it signed in as the owner, then deploy this version. The VM workers and the routines need no change.
+- Verified locally only: `scripts/smoke.sh` (120 checks) on this version; the app's unit tests (15) and Playwright specs (24), including a signed-in non-owner being refused everywhere. The owner's own clicks through the real sign-in are untested until Yuke signs in.
+
 ## Pending human steps (each is one command once the value exists)
+- App: `npx wrangler secret put APP_TOKEN` is covered by `npm run secrets:push`; then in `../agent-board`, `npx deepspace deploy`.
 - Projects: create `yukewF2023/projects` (private) and install the Claude GitHub App on it; create the "Project builder" routine; `npx wrangler secret put BUILDER_FIRE_URL` and `BUILDER_FIRE_TOKEN` from the routine's API trigger. Steps in docs/PROJECTS.md.
 - `npx wrangler secret put GITHUB_TOKEN` — fine-grained PAT, repository `yukewF2023/yuke-persistent-agent-flow` only, permission Contents: read and write. Enables Save on /goals.
 - `npx wrangler secret put MANAGER_FIRE_URL` and `npx wrangler secret put MANAGER_FIRE_TOKEN` — from the :13 routine's Edit → Add another trigger → API → Generate token. Enables the wake button; pushes already wake the manager without it.

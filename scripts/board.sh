@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # CLI for the task board — used by the Claude manager routine and by humans.
 # Reads WORKER_URL / ORCHESTRATOR_TOKEN from the environment or from .dev.vars. bash 3.2 compatible (curl + python3).
+# The board answers nothing without a token, so every call here sends it.
 # Usage: scripts/board.sh <command> [args]   (no args → list of commands)
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,7 +25,7 @@ jstr() { python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))'; }
 cmd="${1:-help}"; shift || true
 case "$cmd" in
   status)
-    curl -sS "$WORKER_URL/api/status" | python3 -c '
+    get /api/status | python3 -c '
 import json,sys,time
 d=json.load(sys.stdin); now=time.time()*1000
 if "error" in d and "goals" not in d: print("BOARD ERROR:", d["error"]); sys.exit(2)
@@ -48,8 +49,8 @@ cf=d.get("cloudflare") or {}
 if cf: print("CLOUDFLARE rows today: read %s / %s · written %s / %s"%(format(cf["reads"],","),format(cf["readLimit"],","),format(cf["writes"],","),format(cf["writeLimit"],",")))
 print("EVENTS"); [print("  %s %s %s"%(time.strftime("%m-%d %H:%MZ",time.gmtime(e["ts"]/1000)),e["kind"],e["text"][:140])) for e in d["events"][:12]]
 ' ;;
-  raw)           curl -sS "$WORKER_URL/api/status" | j ;;
-  workers)       curl -sS "$WORKER_URL/api/status" | python3 -c 'import json,sys;[print(json.dumps(w)) for w in json.load(sys.stdin)["workers"]]' ;;
+  raw)           get /api/status | j ;;
+  workers)       get /api/status | python3 -c 'import json,sys;[print(json.dumps(w)) for w in json.load(sys.stdin)["workers"]]' ;;
   tasks)         get "/manager/tasks?status=${1:-}&goal=${2:-}&limit=${3:-100}" | python3 -c 'import json,sys;[print("#%d %-28s %-9s p%d a%d/%d $%.3f %s"%(t["id"],t["key"],t["status"],t["priority"],t["attempt"],t["max_attempts"],t["cost_usd"],(t.get("last_error") or "")[:60])) for t in json.load(sys.stdin)]' ;;
   task)          get "/manager/tasks/${1:?task id}" | python3 -c '
 import json,sys; d=json.load(sys.stdin); t=d["task"]

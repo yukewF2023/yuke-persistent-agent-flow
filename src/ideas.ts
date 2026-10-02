@@ -1,4 +1,4 @@
-/** Idea-bank rows: the pipe tables of a manager-maintained document that have an "Idea" column. Shared by the board and the pages. */
+/** Idea-bank rows: the pipe tables of a manager-maintained document that have an "Idea" column. The board copies one when an idea is approved, and returns them with the document so the app needs no parser. */
 
 export interface IdeaRow {
   /** 1-based position of the table among the document's idea tables */
@@ -13,7 +13,7 @@ export interface IdeaRow {
   cells: Record<string, string>;
 }
 
-/** Cells of one markdown table line, or null when the line is not a table line. Same split as the pages' markdown renderer. */
+/** Cells of one markdown table line, or null when the line is not a table line. Same split as the app's markdown renderer. */
 export function tableCells(raw: string): string[] | null {
   const line = raw.replace(/\s+$/, "");
   return /^\|.*\|$/.test(line) ? line.slice(1, -1).split("|").map((c) => c.trim()) : null;

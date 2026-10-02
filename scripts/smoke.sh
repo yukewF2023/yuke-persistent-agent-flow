@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end smoke test of the board API (about 110 checks). Usage, from the repo root with `npm run dev` running: scripts/smoke.sh http://localhost:8787
+# End-to-end smoke test of the board API (about 130 checks). Usage, from the repo root with `npm run dev` running: scripts/smoke.sh http://localhost:8787
 # Reads ORCHESTRATOR_TOKEN / WORKER_TOKEN from .dev.vars. Safe to re-run (unique task keys per run); wipe .wrangler/state between runs for a clean board.
 # Written for bash 3.2: every response is captured with R=$(...) first (no nested quotes inside "$(...)").
 set -u
@@ -13,11 +13,11 @@ check() { if [[ "$3" == *"$2"* ]]; then pass=$((pass+1)); echo "ok   $1"; else f
 code() { curl -s -o /dev/null -w "%{http_code}" "$@"; }
 jget() { python3 -c "import json,sys;d=json.load(sys.stdin);print(eval(sys.argv[1]))" "$1"; }
 
-R=$(curl -s "$U/api/status"); check "status public" '"generatedAt"' "$R"
+R=$(curl -s "${M[@]}" "$U/api/status"); check "status with the manager token" '"generatedAt"' "$R"
 R=$(code "$U/manager/tasks"); check "manager needs auth" "401" "$R"
 R=$(code -X POST "$U/worker/claim"); check "worker needs auth" "401" "$R"
 R=$(curl -s "${M[@]}" -X PUT "$U/manager/goals" -d '[{"id":"T","title":"Smoke goal","body":"test","min_ready":2,"catalog_size":12}]'); check "goals upsert" '"upserted": 1' "$R"
-R=$(curl -s "$U/api/status"); check "status has catalog size" '"catalog_size": 12' "$R"; check "status has accepted today" '"acceptedToday"' "$R"
+R=$(curl -s "${M[@]}" "$U/api/status"); check "status has catalog size" '"catalog_size": 12' "$R"; check "status has accepted today" '"acceptedToday"' "$R"
 cat > $T/create.json <<J
 [{"goal_id":"T","key":"T/one-$RUN","title":"first","spec":"do one","acceptance":"- has out/REPORT.md","priority":1},
  {"goal_id":"T","key":"T/two-$RUN","title":"second","spec":"do two","acceptance":"- ok","priority":2,"max_attempts":2},
@@ -43,17 +43,13 @@ J
 R=$(curl -s "${W[@]}" -X POST "$U/worker/tasks/$ID1/progress" -d @$T/prog.json); check "progress post by holder" '"ok": true' "$R"
 echo '{"worker_id":"w2","attempt":1,"step":1}' > $T/prog2.json
 R=$(code "${W[@]}" -X POST "$U/worker/tasks/$ID1/progress" -d @$T/prog2.json); check "progress post wrong holder 409" "409" "$R"
-R=$(curl -s "$U/api/tasks/$ID1/progress"); check "progress read" '"last_tool": "bash"' "$R"
-R=$(curl -s "$U/api/live"); check "live has snapshot" '"npx vitest run"' "$R"
-R=$(curl -s "$U/live/workers"); check "live workers fragment" 'bash: npx vitest run' "$R"
-R=$(curl -s "$U/live/tasks/$ID1"); check "live task fragment" 'data-status="running"' "$R"
-R=$(curl -s "$U/tasks/$ID1"); check "task page live section" 'Live session' "$R"
-R=$(curl -s "$U/"); check "status page live line" 'npx vitest run' "$R"
+R=$(curl -s "${M[@]}" "$U/api/tasks/$ID1/progress"); check "progress read" '"last_tool": "bash"' "$R"
+R=$(curl -s "${M[@]}" "$U/api/live"); check "live has snapshot" '"npx vitest run"' "$R"
 cat > $T/sub1.json <<'J'
 {"worker_id":"w1","attempt":1,"report":"did one","files":{"out/REPORT.md":"# done","out/src/a.ts":"export const a = 1;"},"steps":7,"tokens_in":120000,"tokens_out":4000,"tokens_cached":90000,"cost_usd":0.11,"session_id":"ses_x"}
 J
 R=$(curl -s "${W[@]}" -X POST "$U/worker/tasks/$ID1/submit" -d @$T/sub1.json); check "submit → review" '"status": "review"' "$R"
-R=$(curl -s "$U/api/status"); check "status shows review queue" "T/one-$RUN" "$R"
+R=$(curl -s "${M[@]}" "$U/api/status"); check "status shows review queue" "T/one-$RUN" "$R"
 R=$(curl -s "${M[@]}" "$U/manager/review-queue?limit=1"); check "review queue has files" 'out/src/a.ts' "$R"
 R=$(curl -s "${M[@]}" -X POST "$U/manager/tasks/$ID1/review" -d '{"verdict":"accept","notes":"tests pass"}'); check "accept" '"status": "accepted"' "$R"
 R=$(curl -s "${W[@]}" -X POST "$U/worker/claim" -d '{"worker_id":"w3","host":"smoke","version":"t"}'); check "w3 now claims T/three (dep accepted)" "\"key\": \"T/three-$RUN\"" "$R"; check "claim returns dep info" "\"key\": \"T/one-$RUN\"" "$R"
@@ -70,10 +66,7 @@ python3 -c 'import json,sys;print(json.dumps({"body":open(sys.argv[1]).read(),"t
 R=$(curl -s "${M[@]}" -X PUT "$U/manager/docs/smoke-brief" -d @$T/doc.json); check "doc put" '"version": 1' "$R"
 R=$(curl -s "${M[@]}" -X PUT "$U/manager/docs/smoke-brief" -d @$T/doc.json); check "doc put again bumps version" '"version": 2' "$R"
 R=$(code -X PUT "${M[@]}" "$U/manager/docs/Bad_Id" -d @$T/doc.json); check "doc id validated" "400" "$R"
-R=$(curl -s "$U/api/docs"); check "docs index public" '"smoke-brief"' "$R"
-R=$(curl -s "$U/docs/smoke-brief"); check "doc page renders table" '<td>2</td>' "$R"
-R=$(curl -s "$U/docs/smoke-brief.md"); check "doc raw markdown" '## Bottom line' "$R"
-R=$(curl -s "$U/"); check "status page lists briefs" 'Smoke brief' "$R"
+R=$(curl -s "${M[@]}" "$U/api/docs"); check "docs index" '"smoke-brief"' "$R"
 R=$(curl -s "${M[@]}" -X PATCH "$U/manager/tasks/$ID2" -d '{"status":"ready","priority":3}'); check "patch blocked → ready bumps attempts" '"max_attempts": 3' "$R"
 R=$(curl -s "${M[@]}" -X PUT "$U/manager/pace" -d '{"usd_per_day":0.1}'); check "pace set" '"usd_per_day": 0.1' "$R"
 R=$(curl -s "${W[@]}" -X POST "$U/worker/claim" -d '{"worker_id":"w1"}'); check "claim paced (spent ≥ 0.1 today)" '"pacing": true' "$R"
@@ -84,7 +77,7 @@ python3 -c "import json;print(json.dumps({'worker_id':'w3','report':'big','files
 R=$(curl -s "${W[@]}" -X POST "$U/worker/claim" -d '{"worker_id":"w3"}'); check "w3 re-claims T/three" "\"key\": \"T/three-$RUN\"" "$R"
 R=$(code "${W[@]}" -X POST "$U/worker/tasks/$ID3/submit" -d @$T/big.json); check "files too large → 413" "413" "$R"
 R=$(curl -s "${W[@]}" -X POST "$U/worker/tasks/$ID3/release" -d '{"worker_id":"w3","reason":"sigterm"}'); check "release → ready, attempt not consumed" '"ok": true' "$R"
-R=$(curl -s "$U/api/tasks/$ID3"); check "released task attempt back to 1" '"attempt": 1' "$R"
+R=$(curl -s "${M[@]}" "$U/api/tasks/$ID3"); check "released task attempt back to 1" '"attempt": 1' "$R"
 R=$(curl -s "${M[@]}" -X PUT "$U/manager/memory" -d '{"memory":{"cursor":{"A":3}}}'); check "memory put" '"ok": true' "$R"
 R=$(curl -s "${M[@]}" "$U/manager/memory"); check "memory get" '"cursor"' "$R"
 R=$(curl -s "${M[@]}" -X POST "$U/manager/lock" -d '{"ttl_s":120}'); check "lock acquire" '"ok": true' "$R"
@@ -92,17 +85,11 @@ R=$(code "${M[@]}" -X POST "$U/manager/lock" -d '{"ttl_s":120}'); check "lock bu
 R=$(curl -s "${M[@]}" -X DELETE "$U/manager/lock"); check "unlock" '"ok": true' "$R"
 R=$(curl -s "${M[@]}" -X POST "$U/manager/event" -d '{"kind":"run","text":"smoke run"}'); check "event run" '"ok": true' "$R"
 R=$(curl -s "${M[@]}" -X POST "$U/manager/prune"); check "prune" '"deleted"' "$R"
-R=$(curl -s "$U/"); check "status page html" '<h1>Agent board</h1>' "$R"; check "status page tabs" '<nav class="tabs">' "$R"; check "log entries carry their kind" 'data-kind="task.release"' "$R"
-R=$(curl -s "$U/tasks/$ID1"); check "task page html" 'Acceptance criteria' "$R"
-R=$(code "$U/tasks/99999"); check "task 404 page" "404" "$R"
-R=$(curl -s "$U/api/tasks?status=accepted"); check "public list accepted" "T/one-$RUN" "$R"
+R=$(curl -s "${M[@]}" "$U/api/tasks?status=accepted"); check "list accepted" "T/one-$RUN" "$R"
 R=$(curl -s "${M[@]}" -X PUT "$U/manager/goals" -d '[{"id":"T","title":"Smoke goal","body":"test","min_ready":2},{"id":"R","title":"Research goal","body":"test","min_ready":1}]'); check "second goal upsert" '"upserted": 2' "$R"
 echo "[{\"goal_id\":\"R\",\"key\":\"R/memo-$RUN\",\"title\":\"memo\",\"kind\":\"doc\",\"spec\":\"write a memo\",\"acceptance\":\"- out/MEMO.md exists\",\"priority\":9}]" > $T/doc-task.json
 R=$(curl -s "${M[@]}" -X POST "$U/manager/tasks" -d @$T/doc-task.json); check "doc-kind task created" '"key": "R/memo-' "$R"
 R=$(curl -s "${W[@]}" -X POST "$U/worker/claim" -d '{"worker_id":"w9","goals":["R"]}'); check "worker preferring R claims the R task over higher-priority T tasks" "\"key\": \"R/memo-$RUN\"" "$R"; check "claim keeps the doc kind" '"kind": "doc"' "$R"
-R=$(curl -s "$U/goals"); check "goals editor renders GOALS.md" '## Goal C' "$R"
-R=$(code -X POST "$U/goals" -d 'token=wrong&content=x&sha=y'); check "goals save needs the board token" "401" "$R"
-R=$(code -X POST "$U/wake" -d 'token=wrong'); check "wake needs the board token" "401" "$R"
 R=$(curl -s "${M[@]}" -X POST "$U/manager/wake" -d '{"reason":"smoke"}'); check "wake via CLI records the request" '"message"' "$R"
 R=$(code "${M[@]}" -X POST "$U/manager/wake" -d '{"reason":"smoke again"}'); check "second wake within 5 min refused" "429" "$R"
 # ---- projects: approve an idea from an idea bank ----
@@ -116,40 +103,37 @@ As of today.
 J
 python3 -c 'import json,sys;print(json.dumps({"body":open(sys.argv[1]).read(),"title":"Smoke idea bank","note":"smoke"}))' $T/bank.md > $T/bank.json
 R=$(curl -s "${M[@]}" -X PUT "$U/manager/docs/ideas-smoke" -d @$T/bank.json); check "idea bank put" '"ok": true' "$R"; BV=$(echo "$R" | jget "d['version']")
-R=$(curl -s "$U/docs/ideas-smoke"); check "bank page offers approve on each row" "/projects/new?doc=ideas-smoke&amp;row=1.2&amp;v=$BV" "$R"
-R=$(curl -s "$U/projects/new?doc=ideas-smoke&row=1.1&v=$BV"); check "confirm page shows the idea" "Smoke idea one $RUN" "$R"; check "confirm page has the approve button" 'Approve and build' "$R"
-R=$(code "$U/projects/new?doc=ideas-smoke&row=1.1&v=0"); check "confirm page with a stale version → 409" "409" "$R"
-R=$(code -X POST "$U/projects" --data-urlencode "action=approve" --data-urlencode "doc=ideas-smoke" --data-urlencode "row=1.1" --data-urlencode "idea=Smoke idea one $RUN: send a built demo" --data-urlencode "token=wrong"); check "approve needs the board token" "401" "$R"
-R=$(curl -s -D - -o /dev/null -X POST "$U/projects" --data-urlencode "action=approve" --data-urlencode "doc=ideas-smoke" --data-urlencode "row=1.1" --data-urlencode "idea=Smoke idea one $RUN: send a built demo" --data-urlencode "notes=smoke notes" --data-urlencode "token=$ORCHESTRATOR_TOKEN"); check "approve redirects to the project" "303" "$R"; check "approve lands on the project page" "flash=approved" "$R"
-R=$(curl -s "$U/api/projects?status=approved"); PID=$(echo "$R" | jget "[p['id'] for p in d if p['idea'].startswith('Smoke idea one $RUN')][0]"); check "project recorded with the row" '"Cheapest test": "10 sends"' "$R"; check "project keeps the notes" 'smoke notes' "$R"; echo "project $PID"
-R=$(curl -s -D - -o /dev/null -X POST "$U/projects" --data-urlencode "action=approve" --data-urlencode "doc=ideas-smoke" --data-urlencode "row=1.1" --data-urlencode "idea=Smoke idea one $RUN: send a built demo" --data-urlencode "token=$ORCHESTRATOR_TOKEN"); check "approving the same idea twice goes to the existing project" "flash=already" "$R"
+R=$(curl -s "${M[@]}" -X POST "$U/manager/projects" -d "{\"doc_id\":\"ideas-smoke\",\"version\":$BV,\"row\":\"1.1\",\"idea\":\"Smoke idea one $RUN: send a built demo\",\"notes\":\"smoke notes\"}"); check "project created from an idea row" '"ok": true' "$R"; PID=$(echo "$R" | jget "d['project']['id']"); echo "project $PID"
+R=$(curl -s "${M[@]}" "$U/api/projects?status=approved"); check "project recorded with the row" '"Cheapest test": "10 sends"' "$R"; check "project keeps the notes" 'smoke notes' "$R"
+R=$(curl -s "${M[@]}" -X POST "$U/manager/projects" -d "{\"doc_id\":\"ideas-smoke\",\"version\":$BV,\"row\":\"1.1\",\"idea\":\"Smoke idea one $RUN: send a built demo\"}"); check "the same idea twice → duplicate" '"error": "duplicate"' "$R"
+R=$(curl -s "${M[@]}" -X POST "$U/manager/projects" -d "{\"doc_id\":\"ideas-smoke\",\"version\":0,\"row\":\"1.2\",\"idea\":\"Smoke idea one $RUN: send a built demo\"}"); check "a stale row number falls back to the idea text" '"error": "duplicate"' "$R"
 R=$(code "${M[@]}" -X POST "$U/manager/projects" -d '{"doc_id":"ideas-smoke","version":0,"row":"1.9","idea":"not in the bank"}'); check "approve of a row that is gone → 409" "409" "$R"
-R=$(curl -s "$U/projects/$PID"); check "project page: waiting for the builder" 'Waiting for the builder' "$R"; check "project page says the trigger is not configured" 'not configured' "$R"
 R=$(curl -s "${M[@]}" -X PATCH "$U/manager/projects/$PID" -d '{"status":"nope"}'); check "project status validated" 'status must be one of' "$R"
 R=$(curl -s "${M[@]}" -X PATCH "$U/manager/projects/$PID" -d '{"pr_url":"javascript:alert(1)"}'); check "project links must be https" 'must be an https URL' "$R"
 R=$(curl -s "${M[@]}" -X PATCH "$U/manager/projects/$PID" -d "{\"actor\":\"builder\",\"status\":\"ready\",\"slug\":\"smoke-demo-$RUN\",\"pr_url\":\"https://github.com/example/projects/pull/1\",\"note\":\"test, 3 workstreams\"}"); check "builder marks the project ready" '"status": "ready"' "$R"
-R=$(curl -s "$U/projects/$PID"); check "project page: review the pull request" 'Review the pull request' "$R"
-R=$(curl -s "$U/api/status"); check "status lists projects" "smoke-demo-$RUN" "$R"
-R=$(curl -s "$U/"); check "status page has the projects tab" 'id="projects"' "$R"; check "ready project needs attention" 'is ready for your review' "$R"
-R=$(curl -s "$U/docs/ideas-smoke"); check "bank row shows its project instead of approve" "P$PID · ready to review" "$R"
-R=$(code -X POST "$U/projects" --data-urlencode "action=merged" --data-urlencode "id=$PID" --data-urlencode "token=wrong"); check "project actions need the board token" "401" "$R"
-R=$(code -X POST "$U/projects" --data-urlencode "action=merged" --data-urlencode "id=$PID" --data-urlencode "token=$ORCHESTRATOR_TOKEN"); check "merged → 303" "303" "$R"
-R=$(code -X POST "$U/projects" --data-urlencode "action=result" --data-urlencode "id=$PID" --data-urlencode "outcome=done" --data-urlencode "result=" --data-urlencode "token=$ORCHESTRATOR_TOKEN"); check "result needs a line" "400" "$R"
-R=$(code -X POST "$U/projects" --data-urlencode "action=result" --data-urlencode "id=$PID" --data-urlencode "outcome=done" --data-urlencode "result=3 replies of 10: keep" --data-urlencode "token=$ORCHESTRATOR_TOKEN"); check "result recorded → 303" "303" "$R"
-R=$(curl -s "$U/api/projects/$PID"); check "project done with its result" '"result": "3 replies of 10: keep"' "$R"; check "project log has every step" '"status": "active"' "$R"
-R=$(curl -s "$U/api/tasks?key=T/one-$RUN"); N=$(echo "$R" | jget "len(d)"); check "tasks can be found by key" "1" "$N"
-R=$(code "$U/projects/99999"); check "project 404 page" "404" "$R"
-# ---- /app/*: the DeepSpace app acting for the signed-in owner ----
+R=$(curl -s "${M[@]}" "$U/api/status"); check "status lists projects" "smoke-demo-$RUN" "$R"
+R=$(curl -s "${M[@]}" -X PATCH "$U/manager/projects/$PID" -d '{"status":"active","note":"merged"}'); check "project marked active" '"status": "active"' "$R"
+R=$(curl -s "${M[@]}" -X PATCH "$U/manager/projects/$PID" -d '{"status":"done","result":"3 replies of 10: keep"}'); check "project done with its result" '"result": "3 replies of 10: keep"' "$R"; check "project log has every step" '"status": "active"' "$R"
+R=$(curl -s "${M[@]}" "$U/api/tasks?key=T/one-$RUN"); N=$(echo "$R" | jget "len(d)"); check "tasks can be found by key" "1" "$N"
+R=$(code "${M[@]}" "$U/api/projects/99999"); check "unknown project → 404" "404" "$R"
+# ---- nothing is public: a person sees the board only through the DeepSpace app ----
 A=(-H "Authorization: Bearer $APP_TOKEN" -H "content-type: application/json")
+for path in / /healthz /goals /docs/smoke-brief /docs/smoke-brief.md /tasks/$ID1 /live/workers /projects /projects/$PID "/projects/new?doc=ideas-smoke&row=1.1&v=$BV"; do R=$(code "$U$path"); check "no page at $path" "404" "$R"; done
+for path in /goals /wake /projects; do R=$(code -X POST "$U$path" -d "token=$ORCHESTRATOR_TOKEN"); check "no form route at POST $path" "404" "$R"; done
+for path in /api/status /api/live /api/docs /api/docs/ideas-smoke /api/projects /api/tasks/$ID1; do R=$(code "$U$path"); check "$path needs a token" "401" "$R"; done
+R=$(code "${W[@]}" "$U/api/status"); check "the worker token cannot read the board" "401" "$R"
+R=$(curl -s "${A[@]}" "$U/api/status"); check "the app token reads the board" '"generatedAt"' "$R"
+R=$(code "${A[@]}" -X POST "$U/api/status"); check "the read routes are GET only" "404" "$R"
+# ---- /app/*: the DeepSpace app acting for the signed-in owner ----
 R=$(code "$U/app/config"); check "app routes need the app token" "401" "$R"
 R=$(code "${M[@]}" "$U/app/config"); check "the manager token is not the app token" "401" "$R"
 R=$(code "${A[@]}" "$U/manager/tasks"); check "the app token cannot reach manager routes" "401" "$R"
 R=$(curl -s "${A[@]}" "$U/app/config"); check "app config" '"builderReady": false' "$R"
-R=$(curl -s "$U/api/docs/ideas-smoke"); check "doc JSON carries its idea rows" '"ref": "1.2"' "$R"
+R=$(curl -s "${M[@]}" "$U/api/docs/ideas-smoke"); check "doc JSON carries its idea rows" '"ref": "1.2"' "$R"
 R=$(curl -s "${A[@]}" -X POST "$U/app/projects" -d "{\"doc\":\"ideas-smoke\",\"version\":$BV,\"row\":\"1.2\",\"idea\":\"Smoke idea two $RUN: workflow mailer\",\"notes\":\"from the app\",\"who\":\"owner@example.com\"}"); check "app approves an idea" '"ok": true' "$R"; AID=$(echo "$R" | jget "d['id']"); echo "app project $AID"
 R=$(curl -s "${A[@]}" -X POST "$U/app/projects" -d "{\"doc\":\"ideas-smoke\",\"version\":$BV,\"row\":\"1.2\",\"idea\":\"Smoke idea two $RUN: workflow mailer\"}"); check "app approve twice → duplicate" '"error": "duplicate"' "$R"
 R=$(curl -s "${A[@]}" -X POST "$U/app/projects" -d '{"doc":"ideas-smoke","version":0,"row":"1.9","idea":"gone"}'); check "app approve of a changed row → changed" '"error": "changed"' "$R"
-R=$(curl -s "$U/api/projects/$AID"); check "the approval records who clicked" '"actor": "owner@example.com"' "$R"; check "app project keeps the notes" 'from the app' "$R"
+R=$(curl -s "${M[@]}" "$U/api/projects/$AID"); check "the approval records who clicked" '"actor": "owner@example.com"' "$R"; check "app project keeps the notes" 'from the app' "$R"
 R=$(code "${A[@]}" -X POST "$U/app/projects/$AID" -d '{"action":"merged"}'); check "app action out of order → 409" "409" "$R"
 R=$(curl -s "${M[@]}" -X PATCH "$U/manager/projects/$AID" -d '{"actor":"builder","status":"ready","pr_url":"https://github.com/example/projects/pull/2"}'); check "builder marks the app project ready" '"status": "ready"' "$R"
 R=$(curl -s "${A[@]}" -X POST "$U/app/projects/$AID" -d '{"action":"merged","who":"owner@example.com"}'); check "app records the merge" '"status": "active"' "$R"

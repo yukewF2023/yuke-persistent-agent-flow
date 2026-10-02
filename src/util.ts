@@ -1,11 +1,7 @@
-/** Small helpers shared by the router, the Durable Object and the pages. */
+/** Small helpers shared by the router and the Durable Object. */
 
 export function json(data: unknown, status = 200, extra: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(data, null, 2), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...extra } });
-}
-
-export function html(s: string, status = 200): Response {
-  return new Response(s, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 }
 
 export function timingSafeEqual(a: string, b: string): boolean {
@@ -33,29 +29,6 @@ export async function readJson<T = Record<string, unknown>>(request: Request): P
     return {} as T;
   }
 }
-
-export const esc = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] as string);
-
-export const ago = (ts: number | null | undefined, now: number) => {
-  if (!ts) return "—";
-  const d = Math.round((now - ts) / 1000);
-  const abs = Math.abs(d);
-  const s = abs < 90 ? `${abs}s` : abs < 5400 ? `${Math.round(abs / 60)}m` : abs < 172800 ? `${Math.round(abs / 3600)}h` : `${Math.round(abs / 86400)}d`;
-  return d >= 0 ? `${s} ago` : `in ${s}`;
-};
-
-export const when = (ts: number | null | undefined) => (ts ? new Date(ts).toISOString().replace("T", " ").slice(0, 16) + "Z" : "—");
-
-export const usd = (n: number | null | undefined, digits = 2) => `$${Number(n ?? 0).toFixed(digits)}`;
-
-/** Seconds as "45s", "3m20s" or "1h05m". */
-export const dur = (seconds: number | null | undefined) => {
-  const s = Math.max(0, Math.round(Number(seconds ?? 0)));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const r = s % 60;
-  return h ? `${h}h${String(m).padStart(2, "0")}m` : m ? `${m}m${String(r).padStart(2, "0")}s` : `${r}s`;
-};
 
 /** Start of the current UTC day / month as epoch ms. */
 export function utcDayStart(now = Date.now()): number {

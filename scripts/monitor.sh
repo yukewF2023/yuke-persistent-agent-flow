@@ -2,7 +2,11 @@
 # One-shot health snapshot of the board with anomalies. Exit 0 always.
 set -uo pipefail
 WORKER_URL="${WORKER_URL:-https://yuke-persistent-agent-flow.yuke-521.workers.dev}"
-S=$(curl -sS -m 30 "$WORKER_URL/api/status") || { echo "ANOMALY: board unreachable"; exit 0; }
+# the board answers nothing without a token: take the manager's from the environment or .dev.vars
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+[ -z "${ORCHESTRATOR_TOKEN:-}" ] && [ -f "$HERE/.dev.vars" ] && ORCHESTRATOR_TOKEN=$(sed -n 's/^ORCHESTRATOR_TOKEN="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$HERE/.dev.vars")
+[ -n "${ORCHESTRATOR_TOKEN:-}" ] || { echo "ANOMALY: no ORCHESTRATOR_TOKEN (environment or .dev.vars)"; exit 0; }
+S=$(curl -sS -m 30 -H "Authorization: Bearer $ORCHESTRATOR_TOKEN" "$WORKER_URL/api/status") || { echo "ANOMALY: board unreachable"; exit 0; }
 python3 - "$S" <<'PY'
 import json,sys,time
 d=json.loads(sys.argv[1]); now=time.time()*1000; anom=[]

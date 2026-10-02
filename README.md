@@ -2,7 +2,7 @@
 
 A **task board** where a **Claude manager** plans and reviews work and **two DeepSeek V4.1 Flash workers** execute it around the clock. Built for the team ask: *"everyone runs two persistent agents with little oversight, on deepseek-flash-4-1 via OpenCode Go, doing literally anything."*
 
-Live board: **https://yuke-persistent-agent-flow.yuke-521.workers.dev**
+The board, for people: **https://agent-board.app.space** (the `agent-board` DeepSpace app; private, sign-in required, owner only). The Worker in this repository is the engine behind it and answers nothing without a token.
 
 ## In plain words
 
@@ -11,7 +11,7 @@ Think of a small team with one manager and two junior engineers who never sleep.
 - **You** write what you want in one file, `GOALS.md`. Today that is Goal C, "a standing research desk on how DeepSpace wins business customers", and Goal E, a desk of outreach research and ideas on how DeepSpace reaches those buyers first; Goal D (the same desk for individual builders) was paused on 2026-09-30 and can be switched back on with one line, and the earlier Goal A (a TypeScript algorithms library) and Goal B (its Python port with cross-checks) are retired.
 - **The manager is Claude.** Twice an hour (and within a minute of any push to `main`) it wakes up in a fresh sandbox, reads the goals, and looks at the board. For code tasks it downloads the files and actually runs the tests and type checks: accept, or send back with numbered fixes, or block after three attempts and flag it for you. For research tasks it reads the memo, keeps what is sourced and specific, and then rewrites the goal's **brief** on the board, a living one-page summary for you that it maintains in place (ranked recommendations, what we know, competitor table, open questions), never a growing log. Then it tops up the queue from the goal's catalog, in rounds, so the desk never runs dry. It saves a tiny note to itself and goes back to sleep.
 - **The engineers are DeepSeek.** Two worker processes on a small VM sit in a loop: ask the board for the next task (worker 1 prefers Goal C, worker 2 prefers Goal E), get a fresh folder with the spec, run an `opencode` session with DeepSeek V4.1 Flash that does the work (code and tests, or web research and a memo), package everything under `out/` plus a short report, hand it in, and ask for the next one. If a session hangs or the VM restarts, the lease expires and the task simply goes back on the board.
-- **The board is a Cloudflare Worker.** It is the only shared memory: goals, tasks, who holds what, submitted files, reviews, a log, and spend. Its public page shows all of it live.
+- **The board is a Cloudflare Worker.** It is the only shared memory: goals, tasks, who holds what, submitted files, reviews, a log, and spend. Nothing on it is public: people see it through a small DeepSpace app, `agent-board`, that signs them in and lets only the owner through.
 - **Money is the throttle.** Each task's tokens are priced at OpenCode Go rates and the board releases the day's pace hour by hour (default $1.60 a day, 20 % at 00:00 UTC and the rest spread over the day), refusing new claims when spend runs ahead of it; a human can release a one-day extra on top. So "constantly working" means the workers are always either running a task or waiting a few minutes for budget, never waiting for a human.
 
 Nothing remembers anything between sessions except the board: every opencode session and every manager run starts from scratch and reads the board. The board itself is durable SQLite inside a Cloudflare Durable Object, and the VM downloads a full copy every night to `/srv/backups`.
@@ -43,17 +43,17 @@ A task moves through these states:
 
 | What | Where |
 |---|---|
-| The briefs the manager maintains for you (one per research goal, rewritten in place, with a change log) | https://yuke-persistent-agent-flow.yuke-521.workers.dev/docs/gtm-b2b and `/docs/outreach-b2b` (the paused B2C desk's `/docs/gtm-b2c` stays as it stood), listed under "Briefs for you" on the Overview; raw markdown at `/docs/<id>.md` |
-| The board: a status strip (workers, ready, in progress, review, accepted today, blocked, spend, manager) above tabs: **Overview** (pipeline bar, agents, needs-attention, recent activity, goals progress), **Pipeline** (ready / in progress / review / accepted / blocked columns), **Agents** (the manager and each worker, live), **Goals** (progress and the goal bodies), **Activity** (every event, filterable), **Budget** (Go windows, last 7 days, Cloudflare free tier) | https://yuke-persistent-agent-flow.yuke-521.workers.dev — the tab is in the URL hash (`/#pipeline`, `/#agents`, `/#activity`…), so a bookmark opens straight to it; with JavaScript off the same page shows every section top to bottom |
-| One task: spec, acceptance checklist, every review verdict, the report and the files | click any task on the board (`/tasks/<id>`) |
-| What a worker is doing right now: step, current tool call, tokens and cost so far, the last 30 session events | the [Agents tab](https://yuke-persistent-agent-flow.yuke-521.workers.dev/#agents) (refreshes every 20 s) and the "Live session" section of the running task's page; JSON at `/api/live` and `/api/tasks/<id>/progress` |
-| Turning an idea into a project | every row of an idea bank (`/docs/ideas-outreach`, `/docs/ideas-b2b`) has **Approve →**; the [Projects tab](https://yuke-persistent-agent-flow.yuke-521.workers.dev/#projects) follows each one from the builder's pull request to its result; see [docs/PROJECTS.md](docs/PROJECTS.md) |
-| Editing the goals | https://yuke-persistent-agent-flow.yuke-521.workers.dev/goals — GOALS.md in a form; Save makes one commit on `main` (needs the board token and, once, a GitHub token on the Worker: see [manager/ROUTINE.md](manager/ROUTINE.md) and the page itself); git history at https://github.com/yukewF2023/yuke-persistent-agent-flow/commits/main/GOALS.md |
-| Waking the manager now | any push to `main` fires it within about a minute (GitHub trigger); the "Wake now" button on the Manager card or `scripts/board.sh wake` (once the routine's API trigger is configured); details in [manager/ROUTINE.md](manager/ROUTINE.md) |
+| The briefs the manager maintains for you (one per research goal, rewritten in place, with a change log) | https://agent-board.app.space/docs/gtm-b2b and `/docs/outreach-b2b` (the paused B2C desk's `/docs/gtm-b2c` stays as it stood), listed under "Briefs for you" on the Overview; from a shell, `scripts/board.sh doc-get <id>` |
+| The board: a status strip (workers, ready, in progress, review, accepted today, blocked, spend, manager) above tabs: **Overview** (pipeline bar, agents, needs-attention, recent activity, goals progress), **Pipeline** (ready / in progress / review / accepted / blocked columns), **Agents** (the manager and each worker, live), **Goals** (progress and the goal bodies), **Activity** (every event, filterable), **Budget** (Go windows, last 7 days, Cloudflare free tier) | https://agent-board.app.space/home — the tab is in the URL hash (`/#pipeline`, `/#agents`, `/#activity`…), so a bookmark opens straight to it; with JavaScript off the same page shows every section top to bottom |
+| One task: spec, acceptance checklist, every review verdict, the report and the files | click any task in the app (`/tasks/<id>`) |
+| What a worker is doing right now: step, current tool call, tokens and cost so far, the last 30 session events | the [Agents tab](https://agent-board.app.space/home#agents) (refreshes every 20 s) and the "Live session" section of the running task's page |
+| Turning an idea into a project | every row of an idea bank (`/docs/ideas-outreach`, `/docs/ideas-b2b`) has **Approve →**; the [Projects tab](https://agent-board.app.space/home#projects) follows each one from the builder's pull request to its result; see [docs/PROJECTS.md](docs/PROJECTS.md) |
+| Editing the goals | https://agent-board.app.space/goals — GOALS.md in a form; Save makes one commit on `main` (the Worker needs a GitHub token once: see [manager/ROUTINE.md](manager/ROUTINE.md)); git history at https://github.com/yukewF2023/yuke-persistent-agent-flow/commits/main/GOALS.md |
+| Waking the manager now | any push to `main` fires it within about a minute (GitHub trigger); the "Wake now" button on the Manager card in the app, or `scripts/board.sh wake` (once the routine's API trigger is configured); details in [manager/ROUTINE.md](manager/ROUTINE.md) |
 | The manager's runs, with full transcripts | https://claude.ai/code/routines/trig_0144Fo1i6xENAvLa58h3BBQ1 (:13) and https://claude.ai/code/routines/trig_019wCc3dqf85HAAtkfDTwUtG (:43) |
 | The workers' full opencode transcripts | opencode web UI on the VM through an SSH tunnel, see [worker/README.md](worker/README.md); or public transcript links on task pages when `OPENCODE_SHARE=auto` |
 | Raw worker logs | `gcloud compute ssh agent-workers --zone=us-east1-b -- 'sudo journalctl -u agent-worker@1 -u agent-worker@2 -f'` |
-| Machine-readable status | https://yuke-persistent-agent-flow.yuke-521.workers.dev/api/status |
+| Machine-readable status | `scripts/board.sh raw` (the Worker's `/api/status`, which needs the manager's or the app's token) |
 | Health snapshot with anomalies | `scripts/monitor.sh` |
 
 ## How it works
@@ -63,17 +63,18 @@ Yuke ── edits GOALS.md ──▶ repo ◀── cloned each run ──┐
                                                        │
 Claude routine (Sonnet 5, every 30 min + on push) ─────┼── Bearer ORCHESTRATOR_TOKEN ──▶ Cloudflare Worker: the board
   plan · dispatch · review · replan                    │                                  (Durable Object + SQLite)
-                                                       │                                  public status page
+                                                       │                                  no public pages
 GCP e2-micro VM: agent-worker@1, agent-worker@2 ───────┴── Bearer WORKER_TOKEN ─────────▶ claim · heartbeat · submit · deps
   each task = one fresh `opencode run` (DeepSeek V4.1 Flash via OpenCode Go)
 ```
 
-1. **Goals** live in [GOALS.md](GOALS.md). A human edits that file and nothing else, on the board's `/goals` page or with git; every push to `main` wakes the manager.
+1. **Goals** live in [GOALS.md](GOALS.md). A human edits that file and nothing else, on the app's `/goals` page or with git; every push to `main` wakes the manager.
 2. **The manager** ([manager/PROMPT.md](manager/PROMPT.md)) is a Claude Code cloud routine. Every 30 minutes it syncs the goals, **reviews** each finished task by running its tests in its own sandbox (accept, send back with concrete fixes, or split), and **plans** new tasks from the goal catalog so the board never runs dry. It writes a small JSON memory to the board and never keeps a transcript.
 3. **The workers** ([worker/](worker/)) are two systemd services on one small VM. Each claims the next ready task (dependencies accepted, spend within pace), builds a workspace from a template, writes `TASK.md`, runs `opencode run --auto --format json` with DeepSeek V4.1 Flash, bundles everything under `out/` plus `out/REPORT.md`, and submits it for review. Leases, heartbeats and attempts make crashes harmless.
-4. **The board** ([src/board.ts](src/board.ts)) is one Durable Object: goals, tasks, deliverables, reviews, events, workers, spend. The public page ([src/pages.ts](src/pages.ts), string templates plus a little vanilla JS, no build step) shows the pipeline, what each agent is doing (live: step, tool call, cost so far, the last session events), what needs a human, goal progress, the activity log and the budgets.
+4. **The board** ([src/board.ts](src/board.ts)) is one Durable Object: goals, tasks, deliverables, reviews, events, workers, spend, projects. It has no pages of its own. The `agent-board` DeepSpace app (a separate repository) signs the owner in and shows the pipeline, what each agent is doing (live: step, tool call, cost so far, the last session events), what needs a human, goal progress, the activity log and the budgets; it reads the Worker's `/api/*` and acts through `/app/*` with its own token (`APP_TOKEN`).
+5. **Projects** ([docs/PROJECTS.md](docs/PROJECTS.md)): an idea the owner approves in the app becomes a project record here; the Worker fires the builder routine, which writes a project folder in the `projects` repository and opens a pull request.
 
-"Persistent" means the board always has ready tasks and the workers always pull the next one. "Little oversight" means the only human inputs are `GOALS.md` (the `/goals` editor commits it) and the *needs a human* list on the page.
+"Persistent" means the board always has ready tasks and the workers always pull the next one. "Little oversight" means the only human inputs are `GOALS.md` (the app's `/goals` editor commits it), the ideas approved into projects, and the *needs a human* list.
 
 ## Cost
 
@@ -88,9 +89,9 @@ GCP e2-micro VM: agent-worker@1, agent-worker@2 ───────┴── B
 
 ```bash
 npm install
-npm run setup:env        # generates ORCHESTRATOR_TOKEN + WORKER_TOKEN into .dev.vars, and worker/agent-worker.env for the VM
+npm run setup:env        # generates ORCHESTRATOR_TOKEN, WORKER_TOKEN and APP_TOKEN into .dev.vars, and worker/agent-worker.env for the VM
 npm run check            # typecheck
-npm run dev              # http://localhost:8787
+npm run dev              # http://localhost:8787 (JSON only; run the agent-board app beside it to see pages)
 npm run secrets:push     # pushes .dev.vars to the Worker
 npm run deploy
 ```
@@ -102,7 +103,7 @@ Workers: see [worker/README.md](worker/README.md) (three gcloud commands). Manag
 - `scripts/monitor.sh` — one-shot health snapshot with anomalies.
 - `scripts/board.sh manager-now` — run the manager loop from a laptop instead of waiting for the routine; `scripts/board.sh wake "why"` — start a cloud run now (see [manager/ROUTINE.md](manager/ROUTINE.md)).
 - `scripts/board.sh pace-extra 2.5` — release an extra $2.50 for today only, on top of the daily pace (for "keep going today, whatever the month looks like"); `scripts/board.sh pace-mode burst` — spend the day's pace as fast as the workers can instead of hour by hour.
-- Edit the goals on [/goals](https://yuke-persistent-agent-flow.yuke-521.workers.dev/goals) (one commit per save) or edit [GOALS.md](GOALS.md) and push: the push wakes the manager within about a minute.
+- Edit the goals on [/goals](https://agent-board.app.space/goals) (one commit per save) or edit [GOALS.md](GOALS.md) and push: the push wakes the manager within about a minute.
 
 ## Layout
 
@@ -111,6 +112,6 @@ GOALS.md            the goals (C: DeepSpace B2B go-to-market desk; E: DeepSpace 
 manager/            PROMPT.md (the manager loop), ROUTINE.md (how the routine is configured)
 worker/             worker.mjs (the loop), install.sh (VM bootstrap), agent-worker@.service, templates/, run-tests, README.md
 scripts/            board.sh (CLI), monitor.sh, setup-env.mjs
-src/                index.ts (router), board.ts (Durable Object), pages.ts (status + task pages), util.ts, types.ts
+src/                index.ts (router), board.ts (Durable Object), ideas.ts (idea-bank rows), github.ts (GOALS.md commits), util.ts, types.ts
 docs/               PLAN.md (design), PROJECTS.md (approve an idea → a Cowork project), HANDOFF.md (state for the next session)
 ```
