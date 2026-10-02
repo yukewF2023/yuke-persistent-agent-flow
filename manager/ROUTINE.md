@@ -29,7 +29,7 @@ Not chosen: a GitHub Actions workflow with `workflow_dispatch` running `claude -
 
 ## The project builder
 
-A third routine, on the private repository `yukewF2023/projects`, turns an idea Yuke approves on the board into a project folder and a pull request. It is fired by the board (`BUILDER_FIRE_URL` + `BUILDER_FIRE_TOKEN`), not by a schedule. Its setup and prompt are described in docs/PROJECTS.md; the manager's only part is to keep the approved row pinned in its idea bank (manager/PROMPT.md, "Projects").
+A third routine, `trig_01UAaXvfeZbp2kYPj9uDyrFx` "Project builder" (Opus 5.5, https://claude.ai/code/routines/trig_01UAaXvfeZbp2kYPj9uDyrFx), on the private repository `yukewF2023/projects`, turns an idea Yuke approves in the app into a project folder and a pull request. It has no schedule: the board fires it through its API trigger (`BUILDER_FIRE_URL` + `BUILDER_FIRE_TOKEN`) when an idea is approved, and the project page's "Start the builder" fires it again. Its setup and prompt are described in docs/PROJECTS.md; the manager's only part is to keep the approved row pinned in its idea bank (manager/PROMPT.md, "Projects").
 
 ## Debugging a run
 

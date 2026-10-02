@@ -52,8 +52,8 @@ Two human steps create a project: approve the idea, merge the pull request. A th
 
 ## Setup (one time)
 
-1. **Projects repository.** `yukewF2023/projects`, private. It holds `builder/` and one folder per project. Install the Claude GitHub App on it.
-2. **Builder routine.** A Claude Code routine "Project builder": model `claude-opus-5-5`; tools Bash, Read, Write, Edit, Glob, Grep; repository `yukewF2023/projects`; the manager's environment (`WORKER_URL`, `ORCHESTRATOR_TOKEN`; network access to the Worker host and GitHub); no schedule. Kickoff prompt: check the env vars exist, then read `builder/PROMPT.md` and follow it.
+1. **Projects repository.** `yukewF2023/projects`, private (created 2026-10-02). It holds `builder/` and one folder per project. The Claude GitHub App is installed on it.
+2. **Builder routine.** Done on 2026-10-02: `trig_01UAaXvfeZbp2kYPj9uDyrFx` "Project builder" (https://claude.ai/code/routines/trig_01UAaXvfeZbp2kYPj9uDyrFx): model `claude-opus-5-5`; tools Bash, Read, Write, Edit, Glob, Grep; repository `yukewF2023/projects`; the manager's environment `env_01HUXQno31z13QhWv3CBREm6` (`WORKER_URL`, `ORCHESTRATOR_TOKEN`); no schedule, fired only by the board. Kickoff prompt: check the env vars exist, then read `builder/PROMPT.md` and follow it. Created from a Claude Code session with the `RemoteTrigger` tool, action `create`.
 3. **Builder trigger.** On the routine's page: Edit → Add another trigger → API → Generate token. Then, in this repository: `npx wrangler secret put BUILDER_FIRE_URL` (the `…/routines/<id>/fire` URL shown) and `npx wrangler secret put BUILDER_FIRE_TOKEN`. These two are not in `.dev.vars`; `npm run setup:env` would drop them.
 4. **App.** In `../agent-board`: `npx deepspace secrets set BOARD_URL=<this Worker's address> BOARD_APP_TOKEN=<APP_TOKEN>`, then `npx deepspace deploy`. The DeepSpace account that registered the app is its owner.
 

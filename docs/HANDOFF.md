@@ -40,7 +40,7 @@
 
 ## Pending human steps (each is one command once the value exists)
 - App: `npm run secrets:push` (sends `APP_TOKEN` to the Worker with the other two), then in `../agent-board`, `npx deepspace deploy`.
-- Projects: create `yukewF2023/projects` (private) and install the Claude GitHub App on it; create the "Project builder" routine; `npx wrangler secret put BUILDER_FIRE_URL` and `BUILDER_FIRE_TOKEN` from the routine's API trigger. Steps in docs/PROJECTS.md.
+- Projects: done on 2026-10-02 except the two secrets: `npx wrangler secret put BUILDER_FIRE_URL` and `BUILDER_FIRE_TOKEN` from the API trigger of routine `trig_01UAaXvfeZbp2kYPj9uDyrFx`. `GITHUB_TOKEN`, `MANAGER_FIRE_URL` and `MANAGER_FIRE_TOKEN` were set the same day. Steps in docs/PROJECTS.md.
 - `npx wrangler secret put GITHUB_TOKEN` — fine-grained PAT, repository `yukewF2023/yuke-persistent-agent-flow` only, permission Contents: read and write. Enables Save on /goals.
 - `npx wrangler secret put MANAGER_FIRE_URL` and `npx wrangler secret put MANAGER_FIRE_TOKEN` — from the :13 routine's Edit → Add another trigger → API → Generate token. Enables the wake button; pushes already wake the manager without it.
 - Optional: `OPENCODE_SHARE=auto` in `worker/agent-worker.env` + re-run the install to get public transcript links on task pages and in the live view (opencode.ai share pages are public).
