@@ -151,7 +151,7 @@ PY
   doc-put)       python3 -c 'import json,sys;print(json.dumps({"body":open(sys.argv[1]).read(),"title":sys.argv[2],"note":sys.argv[3]}))' "${2:?markdown file}" "${3:-}" "${4:-}" > /tmp/board-doc.json; sendfile PUT "/manager/docs/${1:?doc id}" /tmp/board-doc.json | j ;;
   projects)      get "/manager/projects?status=${1:-}" | python3 -c 'import json,sys;[print("P%d %-9s %-24s %-15s %s%s"%(p["id"],p["status"],p.get("slug") or "-",p["doc_id"],p["idea"][:100],(" → "+p["result"]) if p.get("result") else "")) for p in json.load(sys.stdin)]' ;;
   project)       get "/manager/projects/${1:?project id}" | j ;;
-  project-set)   send PATCH "/manager/projects/${1:?project id}" "${2:?json, e.g. {\"status\":\"active\"}}" | j ;;
+  project-set)   send PATCH "/manager/projects/${1:?project id}" "${2:?json with status, slug, pr_url, result or note}" | j ;;
   needs-human)   get /manager/needs-human | j ;;
   needs-human-add) send POST /manager/needs-human "{\"text\":$(printf '%s' "${1:?text}" | jstr)}" | j ;;
   needs-human-clear) send DELETE "/manager/needs-human/${1:-}" | j ;;
