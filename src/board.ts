@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { ideaRows } from "./ideas";
-import type { BoardStatus, DeliverableRow, DocMeta, DocRow, Env, EventRow, Feedback, FeedbackKind, FeedbackRow, GoalRow, LiveStatus, ProgressRow, ProgressSnapshot, Project, ProjectLogEntry, ProjectRow, ProjectStatus, ProjectSummary, ReviewRow, Role, SpendSummary, TaskRow, TaskStatus, WorkerRow } from "./types";
+import type { BoardStatus, DeliverableRow, DocMeta, DocRow, Env, EventRow, Feedback, FeedbackKind, FeedbackRow, GoalRow, GoalsProposal, LiveStatus, ProgressRow, ProgressSnapshot, Project, ProjectLogEntry, ProjectRow, ProjectStatus, ProjectSummary, ReviewRow, Role, SpendSummary, TaskRow, TaskStatus, WorkerRow } from "./types";
 import { json, readJson, secondsToUtcMidnight, utcDayStart } from "./util";
 
 /** OpenCode Go usage windows in USD (the workers' model provider). */
@@ -33,6 +33,7 @@ const FEEDBACK_KINDS: FeedbackKind[] = ["generic", "not_for_us", "known", "sharp
 const FEEDBACK_NOTE_MAX = 500;
 const FEEDBACK_OPEN_MAX = 40;
 const FEEDBACK_KEEP_MS = 30 * 86_400_000;
+const GOALS_MAX_BYTES = 200_000;
 const KINDS = ["ts", "py", "check", "other", "doc"];
 const TERMINAL: TaskStatus[] = ["accepted", "rejected", "cancelled"];
 
@@ -205,6 +206,7 @@ export class Board extends DurableObject<Env> {
         return pr ? json(pr) : json({ error: "not found" }, 404);
       }
       if (m === "GET" && p[0] === "api" && p[1] === "feedback" && !p[2]) return json(this.listFeedback(url));
+      if (m === "GET" && p[0] === "api" && p[1] === "goals-proposal" && !p[2]) return json({ proposal: this.kvJson<GoalsProposal>("goals:proposal") });
       if (m === "GET" && p[0] === "api" && p[1] === "tasks" && !p[2]) return json(this.listTasks(url));
       if (m === "GET" && p[0] === "api" && p[1] === "tasks" && p[2] && p[3] === "progress") return this.progressDetail(Number(p[2]));
       if (m === "GET" && p[0] === "api" && p[1] === "tasks" && p[2]) return this.taskDetail(Number(p[2]));
@@ -270,6 +272,7 @@ export class Board extends DurableObject<Env> {
       projects: this.q<ProjectSummary>("SELECT id, slug, doc_id, idea, status, pr_url, session_url, result, note, created_at, updated_at FROM projects ORDER BY id DESC LIMIT 40"),
       spend: this.spendSummary(now),
       needsHuman: this.kvJson<{ ts: number; text: string }[]>("needs_human") ?? [],
+      goalsProposal: ((gp) => (gp ? { ts: gp.ts, summary: gp.summary } : null))(this.kvJson<GoalsProposal>("goals:proposal")),
       feedbackOpen: Number(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM feedback WHERE status = 'open'")?.n ?? 0),
       events,
       progress,
@@ -752,6 +755,31 @@ export class Board extends DurableObject<Env> {
       return pr ? json(pr) : json({ error: "not found" }, 404);
     }
     if (p[0] === "projects" && p[1] && m === "PATCH") return this.projectPatch(Number(p[1]), await readJson(request), now);
+    if (p[0] === "goals-proposal" && m === "GET") return json({ proposal: this.kvJson<GoalsProposal>("goals:proposal") });
+    if (p[0] === "goals-proposal" && m === "PUT") {
+      // The manager drafts; only the human's approval in the app commits (the Worker does that, with the GitHub token).
+      const body = await readJson<Record<string, unknown>>(request);
+      const summary = str(body.summary, 200).trim();
+      const base = str(body.base, GOALS_MAX_BYTES + 1);
+      const content = str(body.content, GOALS_MAX_BYTES + 1).replace(/\r\n?/g, "\n").replace(/\n*$/, "\n");
+      if (summary.length < 3) return json({ error: "summary required: one line saying what changes and why" }, 400);
+      if (!base || base.length > GOALS_MAX_BYTES || content.length > GOALS_MAX_BYTES) return json({ error: "base and content are required (the whole file each)" }, 400);
+      if (!/^## Goal [A-Za-z0-9_-]+: /m.test(content)) return json({ error: "refused: the proposed file has no `## Goal <id>: <title>` section" }, 400);
+      if (content.trim() === base.trim()) return json({ error: "the proposed file is the same as the current one" }, 400);
+      this.kvSet("goals:proposal", JSON.stringify({ ts: now, summary, base, content } satisfies GoalsProposal));
+      this.event("manager", "goals.propose", null, `drafted a GOALS.md change for approval: ${summary}`);
+      this.touch();
+      return json({ ok: true });
+    }
+    if (p[0] === "goals-proposal" && m === "DELETE") {
+      const body = await readJson<{ actor?: unknown; why?: unknown }>(request).catch(() => ({}) as { actor?: unknown; why?: unknown });
+      const cur = this.kvJson<GoalsProposal>("goals:proposal");
+      if (!cur) return json({ ok: true, cleared: false });
+      this.kvSet("goals:proposal", null);
+      this.event(str(body.actor, 40) || "manager", "goals.propose", null, `${str(body.why, 40) || "withdrawn"}: ${cur.summary}`);
+      this.touch();
+      return json({ ok: true, cleared: true });
+    }
     if (p[0] === "feedback" && !p[1] && m === "GET") return json(this.listFeedback(url));
     if (p[0] === "feedback" && !p[1] && m === "POST") return this.feedbackCreate(await readJson(request), now);
     if (p[0] === "feedback" && p[1] && m === "PATCH") return this.feedbackHandle(Number(p[1]), await readJson(request), now);

@@ -155,6 +155,19 @@ R=$(curl -s "${M[@]}" -X PATCH "$U/manager/feedback/$FID" -d '{"outcome":"moved 
 for F in $FID2 $FID3; do R=$(curl -s "${M[@]}" -X PATCH "$U/manager/feedback/$F" -d '{"outcome":"smoke cleanup"}'); done
 R=$(curl -s "${A[@]}" "$U/api/feedback?status=open"); check "handled feedback leaves the open list" "$(echo "$R" | grep -c "\"id\": $FID,")" "0"
 R=$(curl -s "${A[@]}" "$U/api/feedback?status=handled"); check "the outcome is kept" 'rule added to taste-smoke' "$R"
+# ---- a GOALS.md change the manager drafts and the owner decides ----
+python3 -c 'import json;print(json.dumps({"summary":"pause goal D","base":"## Goal D: x\n- status: active\n","content":"## Goal D: x\n- status: paused\n"}))' > $T/prop.json
+R=$(code "${A[@]}" -X PUT "$U/manager/goals-proposal" -d @$T/prop.json); check "only the manager drafts a goals change" "401" "$R"
+R=$(code "${M[@]}" -X PUT "$U/manager/goals-proposal" -d '{"summary":"x y z","base":"## Goal D: x\n","content":"no goals here\n"}'); check "a proposal must keep a goal section" "400" "$R"
+R=$(code "${M[@]}" -X PUT "$U/manager/goals-proposal" -d '{"summary":"x y z","base":"## Goal D: x\n","content":"## Goal D: x\n"}'); check "a proposal must change something" "400" "$R"
+R=$(curl -s "${M[@]}" -X PUT "$U/manager/goals-proposal" -d @$T/prop.json); check "manager drafts a goals change" '"ok": true' "$R"
+R=$(curl -s "${A[@]}" "$U/api/goals-proposal"); check "app reads the proposal" '- status: paused' "$R"
+R=$(curl -s "${A[@]}" "$U/api/status"); check "status names the proposal" '"summary": "pause goal D"' "$R"
+R=$(code "${A[@]}" -X POST "$U/app/goals-proposal" -d '{"action":"approve"}'); check "approve without a GitHub token → 503" "503" "$R"
+R=$(code "${A[@]}" -X POST "$U/app/goals-proposal" -d '{"action":"nope"}'); check "proposal action validated" "400" "$R"
+R=$(curl -s "${A[@]}" -X POST "$U/app/goals-proposal" -d '{"action":"decline","who":"owner@example.com"}'); check "app declines the proposal" '"ok": true' "$R"
+R=$(curl -s "${A[@]}" "$U/api/goals-proposal"); check "a declined proposal is gone" '"proposal": null' "$R"
+R=$(code "${A[@]}" -X POST "$U/app/goals-proposal" -d '{"action":"decline"}'); check "deciding twice → 404" "404" "$R"
 R=$(curl -s "${A[@]}" "$U/app/goals"); check "app reads the goals file" '## Goal' "$R"
 R=$(code "${A[@]}" -X PUT "$U/app/goals" -d '{"content":"## Goal Z: x\n","sha":"abc","message":"m"}'); check "app goals save without a GitHub token → 503" "503" "$R"
 R=$(code "${A[@]}" -X POST "$U/app/wake" -d '{"reason":"smoke","who":"owner@example.com"}'); check "app wake goes through the same guard" "429" "$R"

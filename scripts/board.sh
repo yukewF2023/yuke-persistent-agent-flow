@@ -43,6 +43,8 @@ for t in d["running"]: print("  #%d %s %s by %s since %s"%(t["id"],t["key"],t["s
 print("BLOCKED")
 for t in d["blocked"]: print("  #%d %s: %s"%(t["id"],t["key"],(t.get("last_error") or "")[:120]))
 print("NEEDS HUMAN"); [print("  - "+n["text"]) for n in d["needsHuman"]]
+gp=d.get("goalsProposal")
+if gp: print("GOALS PROPOSAL waiting for Yuke: "+gp["summary"])
 print("FEEDBACK waiting: %d%s"%(d.get("feedbackOpen",0)," (scripts/board.sh feedback)" if d.get("feedbackOpen") else ""))
 print("PROJECTS"); [print("  P%d %s %s (%s) %s"%(p["id"],p["status"],p.get("slug") or "-",p["doc_id"],p["idea"][:80])) for p in d.get("projects",[]) if p["status"] not in ("done","dropped")]
 m=d["manager"]; print("MANAGER last run %s%s"%(ago(m["lastRunAt"])," · LOCKED" if m["lockedUntil"] else ""))
@@ -160,6 +162,9 @@ for f in json.load(sys.stdin):
     if f.get("note"): print("   note: "+f["note"])
     if f.get("outcome"): print("   done: "+f["outcome"])' ;;
   feedback-done) send PATCH "/manager/feedback/${1:?feedback id}" "{\"outcome\":$(printf '%s' "${2:?one line: what you did with it}" | jstr)}" | j ;;
+  goals-proposal) get /manager/goals-proposal | python3 -c 'import json,sys;p=json.load(sys.stdin).get("proposal");print("none" if not p else "open: %s\nbase is %d bytes, proposed %d bytes"%(p["summary"],len(p["base"]),len(p["content"])))' ;;
+  goals-propose) python3 -c 'import json,sys;print(json.dumps({"summary":sys.argv[2],"base":open(sys.argv[3]).read(),"content":open(sys.argv[1]).read()}))' "${1:?the whole proposed GOALS.md, as a file}" "${2:?one line: what changes and why}" "$HERE/GOALS.md" > /tmp/board-goals-proposal.json; sendfile PUT /manager/goals-proposal /tmp/board-goals-proposal.json | j ;;
+  goals-proposal-withdraw) send DELETE /manager/goals-proposal | j ;;
   needs-human)   get /manager/needs-human | j ;;
   needs-human-add) send POST /manager/needs-human "{\"text\":$(printf '%s' "${1:?text}" | jstr)}" | j ;;
   needs-human-clear) send DELETE "/manager/needs-human/${1:-}" | j ;;

@@ -74,7 +74,7 @@ GCP e2-micro VM: agent-worker@1, agent-worker@2 ───────┴── B
 4. **The board** ([src/board.ts](src/board.ts)) is one Durable Object: goals, tasks, deliverables, reviews, events, workers, spend, projects. It has no pages of its own. The `agent-board` DeepSpace app (a separate repository) signs the owner in and shows the pipeline, what each agent is doing (live: step, tool call, cost so far, the last session events), what needs a human, goal progress, the activity log and the budgets; it reads the Worker's `/api/*` and acts through `/app/*` with its own token (`APP_TOKEN`).
 5. **Projects** ([docs/PROJECTS.md](docs/PROJECTS.md)): an idea the owner approves in the app becomes a project record here; the Worker fires the builder routine, which writes a project folder in the `projects` repository and opens a pull request.
 
-"Persistent" means the board always has ready tasks and the workers always pull the next one. "Little oversight" means the only human inputs are `GOALS.md` (the app's `/goals` editor commits it), the ideas approved into projects, optional feedback on an idea-bank row or a note to the manager (which the manager turns into each desk's taste notes; see [manager/PROMPT.md](manager/PROMPT.md)), and the *needs a human* list.
+"Persistent" means the board always has ready tasks and the workers always pull the next one. "Little oversight" means the only human inputs are `GOALS.md` (the app's `/goals` editor commits it), the ideas approved into projects, optional feedback on an idea-bank row or a note to the manager (which the manager turns into each desk's taste notes, or into a drafted GOALS.md change the human approves in the app; see [manager/PROMPT.md](manager/PROMPT.md)), and the *needs a human* list.
 
 ## Cost
 

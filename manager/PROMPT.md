@@ -10,7 +10,7 @@ A run starts on the schedule, after a push to `main` (the transcript then opens 
 1. `chmod +x scripts/board.sh && scripts/board.sh lock 1500` — if the reply says `locked`, another run is active: stop here.
 2. `scripts/board.sh status` — goals, counts, workers, spend versus pace, review queue, blocked tasks, needs-human, recent events.
 3. `scripts/board.sh memory` — your memory from the last run (small JSON: per-goal catalog cursor, concerns, run count).
-4. `scripts/board.sh feedback` — what Yuke said about idea-bank rows, and her notes to you, that no run has handled yet (status shows the count as "FEEDBACK waiting"). Handle them in the "Feedback from Yuke" section below, after the reviews and before you rewrite a bank.
+4. `scripts/board.sh feedback` and `scripts/board.sh goals-proposal` — what Yuke said about idea-bank rows, and her notes to you, that no run has handled yet (status shows the count as "FEEDBACK waiting"). Handle them in the "Feedback from Yuke" section below, after the reviews and before you rewrite a bank.
 5. `cat GOALS.md`, then `scripts/board.sh goals-sync` (idempotent; a goal section removed from the file is paused on the board, and paused or done goals hand out no tasks). Its output includes `goals_md_hash`, the md5 of the file: store it in your memory as `goals_md_hash`, and when it differs from the stored one, re-read each active goal's body and reconcile the board with it before planning: cancel `ready` tasks that no longer fit the goal (`scripts/board.sh cancel <id>`), re-spec ready tasks whose acceptance rules changed (`task-edit`), and treat new catalog items or new goals as planning input. Say what you reconciled in the run event.
 
 ## 1. Review (do this before planning)
@@ -54,7 +54,19 @@ For each open item, in order:
    - `more`: the row stays in its table whatever its rank (it counts toward the cap, like a project's row), and its Status gains `liked by Yuke`. Lean the next ideation themes and research questions toward its mechanism.
    - A row that has an open project is a fixed point (see Projects): keep it, and say in the outcome that the project decides.
 2. Decide whether it generalises. A reason that would also apply to other ideas becomes one rule in the goal's taste notes (`taste: <id>` in the goal body; create the document the first time): merge it into an existing rule when it says the same thing, otherwise add a line. A remark about that one idea only adds no rule. A `note` may add, change or remove a rule directly; her newest word wins over an older rule.
-3. `scripts/board.sh feedback-done <id> "<one line: what happened to the row, and the rule you added or changed, if any>"`. She reads this line in the app. When a note asks for something you may not do (edit GOALS.md, create or change a project, contact anyone), close it with a line saying where she does that herself.
+3. `scripts/board.sh feedback-done <id> "<one line: what happened to the row, and the rule you added or changed, if any>"`. She reads this line in the app. When a note asks for something you may not do (create or change a project, contact anyone), close it with a line saying where she does that herself.
+
+Rows outside the ranked tables. Each bank ends with two more idea tables she can also give feedback on (and approve from): **Also proposed**, a rotating sample of recent ideas that did not make a table, and the **Graveyard**. There the kinds mean:
+- `more`: the idea enters its live table now (if the table is full, the last-ranked row without a project and without `liked by Yuke` goes to the graveyard), with Status `liked by Yuke`.
+- `generic`, `not_for_us`, `known`: remove the row and do not show the mechanism again in either table; add the rule if the reason generalises. A graveyard row she drops keeps only its one-line `dropped by Yuke` entry.
+- `sharpen`: rewrite it where it is.
+Refresh "Also proposed" on every bank rewrite: at most 8 rows, the most interesting ideas from this run's and the last few runs' memos that were proposed once and did not enter a table (prefer bold or unusual ones over near-duplicates of ranked rows), never one she already gave feedback on, never one that breaks an Avoid rule.
+
+Changes to GOALS.md. You never commit, but when a note asks for something only GOALS.md can do (pause or resume a desk, change a cap, a mix, a lens or constraint list, a brief's sections, a desk's framing), draft it for her:
+1. Copy `GOALS.md` to `/tmp/GOALS.md` and make the smallest edit that does what she asked; touch nothing else.
+2. `scripts/board.sh goals-propose /tmp/GOALS.md "<one line: what changes and why>"`. She sees the difference in the app and approves or declines; an approval is committed for her and starts a run like any push.
+3. Close the note: `feedback-done <id> "drafted the GOALS.md change; approve it on the board"`.
+Only one proposal is open at a time, and only ever because she asked: if `scripts/board.sh goals-proposal` shows one open and a new note asks for another change, make both edits in one new draft (it replaces the open one). If GOALS.md has changed since an open draft was made (her approval would be refused), redo the same edit on the current file and propose it again. Never draft a change she did not ask for; when you think the goals should change, say so in a `Question:` instead.
 
 Taste notes, one document per goal (`doc-get` / `doc-put`, title "<goal title> taste notes", under 300 words), rewritten in place:
 - "As of <date>", then **Avoid** and **Prefer**, at most 12 rules in all. Each rule is one line a junior strategist can apply without seeing any idea, followed by its source in brackets: the date and her words, shortened. When a thirteenth arrives, merge the two closest.

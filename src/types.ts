@@ -241,6 +241,20 @@ export interface FeedbackRow {
 /** A feedback item as the API returns it. */
 export type Feedback = Omit<FeedbackRow, "row"> & { row: Record<string, string> | null };
 
+/**
+ * A change to GOALS.md the manager drafted because the human asked for one in a note. The manager cannot commit; the human
+ * reads the difference in the app and approves (the Worker commits `content` if the file still equals `base`) or declines.
+ */
+export interface GoalsProposal {
+  ts: number;
+  /** one line: what changes and why */
+  summary: string;
+  /** GOALS.md as the manager read it */
+  base: string;
+  /** the whole file as proposed */
+  content: string;
+}
+
 export interface SpendSummary {
   todayUsd: number;
   fiveHourUsd: number;
@@ -290,6 +304,8 @@ export interface BoardStatus {
   needsHuman: { ts: number; text: string }[];
   /** feedback from the human that the manager has not handled yet (items at /api/feedback) */
   feedbackOpen: number;
+  /** a GOALS.md change drafted by the manager and waiting for the human's decision (the text is at /api/goals-proposal) */
+  goalsProposal: { ts: number; summary: string } | null;
   events: EventRow[];
   /** live snapshots of the tasks in progress, keyed by task id (as posted by the workers; at most one per running task) */
   progress: Record<string, ProgressSnapshot>;

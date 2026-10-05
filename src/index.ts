@@ -1,6 +1,6 @@
 import { Board } from "./board";
 import { getFile, getRawFile, putFile } from "./github";
-import type { Env, Project, Role } from "./types";
+import type { Env, GoalsProposal, Project, Role } from "./types";
 import { bearerOk, json, readJson } from "./util";
 
 export { Board };
@@ -66,7 +66,7 @@ async function wakeManager(env: Env, stub: DurableObjectStub, origin: string, wh
  * Thin router. Authenticates and forwards to the single Board Durable Object with an `x-board-role` header the DO trusts.
  *
  * Nothing here is public. People see the board through the DeepSpace app (agent-board), which signs them in and calls
- * /app/* (approve, project actions, feedback, goals, wake) and GET /api/* with APP_TOKEN; the manager and builder routines use /manager/* (and the same read-only /api/*)
+ * /app/* (approve, project actions, feedback, goals and the manager's proposed goal changes, wake) and GET /api/* with APP_TOKEN; the manager and builder routines use /manager/* (and the same read-only /api/*)
  * with ORCHESTRATOR_TOKEN; the VM workers use /worker/* with WORKER_TOKEN. Every other request gets a bare 404.
  */
 export default {
@@ -158,6 +158,31 @@ export default {
           try {
             const commit = await putFile(gh, sha, content, message);
             await boardCall(stub, url.origin, "/manager/event", { actor: who, kind: "goals.edit", text: `GOALS.md edited from the board: ${message} → ${commit.commitUrl}` });
+            return json({ ok: true, commitSha: commit.commitSha, commitUrl: commit.commitUrl });
+          } catch (err) {
+            return json({ error: String((err as Error)?.message ?? err) }, 409);
+          }
+        }
+        if (parts[1] === "goals-proposal" && !parts[2] && method === "POST") {
+          // The manager drafted a GOALS.md change; the human decides. Approve commits it, but only over the file the draft was made from.
+          const cur = await internal("/api/goals-proposal");
+          if (cur.error) return json({ error: cur.error }, 503);
+          const proposal = (cur.body as { proposal: GoalsProposal | null }).proposal;
+          if (!proposal) return json({ error: "There is no proposed change any more. Reload the board." }, 404);
+          const clear = (why: string) => boardCall(stub, url.origin, "/manager/goals-proposal", { actor: who, why }, "DELETE");
+          const action = text(body.action, 20);
+          if (action === "decline") {
+            await clear("declined");
+            return json({ ok: true });
+          }
+          if (action !== "approve") return json({ error: "action must be approve or decline" }, 400);
+          if (!gh.token) return json({ error: "the board has no GITHUB_TOKEN, so it cannot commit" }, 503);
+          try {
+            const f = await getFile(gh);
+            if (f.text.trim() !== proposal.base.trim()) return json({ error: "stale" }, 409);
+            const commit = await putFile(gh, f.sha, proposal.content, `GOALS.md: ${proposal.summary} (drafted by the manager, approved on the board)`.slice(0, 200));
+            await clear("approved");
+            await boardCall(stub, url.origin, "/manager/event", { actor: who, kind: "goals.edit", text: `GOALS.md changed as the manager proposed: ${proposal.summary} → ${commit.commitUrl}` });
             return json({ ok: true, commitSha: commit.commitSha, commitUrl: commit.commitUrl });
           } catch (err) {
             return json({ error: String((err as Error)?.message ?? err) }, 409);
