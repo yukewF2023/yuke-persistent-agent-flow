@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Daily backup of the whole board (goals, tasks, deliverables, reviews, events, memory) to /srv/backups. Keeps 14 days.
+# Root-only (directory 700, files 600): the export holds every memo, and the workers' sessions must not be able to read it.
 set -euo pipefail
+umask 077
 . /etc/agent-worker.env
-mkdir -p /srv/backups
+install -d -m 700 -o root -g root /srv/backups
 out="/srv/backups/board-$(date -u +%F).json"
 curl -sS -m 120 -H "Authorization: Bearer $WORKER_TOKEN" "${BOARD_URL%/}/worker/export" -o "$out.tmp" && mv "$out.tmp" "$out"
 find /srv/backups -name 'board-*.json' -mtime +14 -delete

@@ -839,15 +839,26 @@ export class Board extends DurableObject<Env> {
       return json({ ok: true });
     }
     if (p[0] === "lock" && m === "POST") {
-      const body = await readJson<{ ttl_s?: unknown }>(request);
+      // One run holds the lock. The same holder may lock again to extend it, so a long run keeps the board to itself
+      // instead of letting the lock lapse under it (two runs once reviewed and rewrote the same briefs side by side).
+      const body = await readJson<{ ttl_s?: unknown; holder?: unknown }>(request);
+      const holder = str(body.holder, 80);
       const until = Number(this.kvGet("manager:lock_until") ?? 0);
-      if (until > now) return json({ error: "locked", locked_until: until }, 409);
+      const mine = Boolean(holder) && this.kvGet("manager:lock_holder") === holder;
+      if (until > now && !mine) return json({ error: "locked", locked_until: until }, 409);
       const ttl = Math.min(3600, Math.max(60, num(body.ttl_s, 1500)));
       this.kvSet("manager:lock_until", String(now + ttl * 1000));
-      return json({ ok: true, locked_until: now + ttl * 1000 });
+      this.kvSet("manager:lock_holder", holder || null);
+      return json({ ok: true, locked_until: now + ttl * 1000, renewed: until > now && mine });
     }
     if (p[0] === "lock" && m === "DELETE") {
+      // With a holder: release only your own lock (a run that lost it must not free the run that has it). Without: force.
+      const body = await readJson<{ holder?: unknown }>(request).catch(() => ({}) as { holder?: unknown });
+      const holder = str(body.holder, 80);
+      const held = this.kvGet("manager:lock_holder");
+      if (holder && held && held !== holder && Number(this.kvGet("manager:lock_until") ?? 0) > now) return json({ error: "another run holds the lock now; it is not yours to release" }, 409);
       this.kvSet("manager:lock_until", null);
+      this.kvSet("manager:lock_holder", null);
       return json({ ok: true });
     }
     if (p[0] === "export" && m === "GET") return this.exportAll();

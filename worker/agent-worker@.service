@@ -24,6 +24,8 @@ RestartSec=15
 TimeoutStopSec=90
 KillMode=mixed
 MemoryMax=700M
+# the board's backups are not for the sessions (they are root-only as well; this hides the directory altogether)
+InaccessiblePaths=-/srv/backups
 Nice=5
 
 [Install]

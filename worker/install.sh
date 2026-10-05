@@ -38,7 +38,9 @@ done
 install -m 755 "$SRC/worker.mjs" /srv/agent/worker.mjs
 install -m 755 "$SRC/run-tests" /srv/templates/run-tests
 install -m 755 "$SRC/board-backup" /usr/local/bin/board-backup
-mkdir -p /srv/backups
+# root-only: the export holds every memo, and a worker session once read it to recover memos it was not given
+install -d -m 700 -o root -g root /srv/backups
+find /srv/backups -type f -exec chown root:root {} + -exec chmod 600 {} +
 cat > /etc/cron.d/board-backup <<'CRON'
 # daily board export (see worker/board-backup); runs as root because /etc/agent-worker.env is root-only
 17 1 * * * root /usr/local/bin/board-backup >> /var/log/board-backup.log 2>&1

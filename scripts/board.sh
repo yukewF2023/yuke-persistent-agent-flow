@@ -170,8 +170,9 @@ for f in json.load(sys.stdin):
   needs-human-clear) send DELETE "/manager/needs-human/${1:-}" | j ;;
   events)        get "/manager/events?limit=${1:-40}" | python3 -c 'import json,sys,time;[print(time.strftime("%m-%d %H:%MZ",time.gmtime(e["ts"]/1000)),e["kind"],("#%d"%e["task_id"]) if e["task_id"] else "",e["text"][:160]) for e in json.load(sys.stdin)]' ;;
   event)         send POST /manager/event "{\"kind\":\"${1:?kind}\",\"text\":$(printf '%s' "${2:?text}" | jstr)}" | j ;;
-  lock)          send POST /manager/lock "{\"ttl_s\":${1:-1500}}" | j ;;
-  unlock)        send DELETE /manager/lock | j ;;
+  lock)          [ -s /tmp/board-lock-holder ] || echo "run-$(date -u +%Y%m%dT%H%M%S)-$RANDOM$RANDOM" > /tmp/board-lock-holder   # this run's name: locking again extends its own lock
+                 send POST /manager/lock "{\"ttl_s\":${1:-1500},\"holder\":\"$(cat /tmp/board-lock-holder)\"}" | j ;;
+  unlock)        if [ "${1:-}" = force ] || [ ! -s /tmp/board-lock-holder ]; then send DELETE /manager/lock | j; else send DELETE /manager/lock "{\"holder\":\"$(cat /tmp/board-lock-holder)\"}" | j; rm -f /tmp/board-lock-holder; fi ;;
   prune)         send POST /manager/prune | j ;;
   wake)          send POST /manager/wake "{\"who\":\"cli\",\"reason\":$(printf '%s' "${1:-scripts/board.sh wake}" | jstr)}" | j ;;
   manager-now)   command -v claude >/dev/null || { echo "claude CLI not found"; exit 1; }

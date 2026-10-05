@@ -32,7 +32,7 @@ then browse http://localhost:4091 and http://localhost:4092 (leave the command r
 Optional public transcript links: set `OPENCODE_SHARE=auto` in `worker/agent-worker.env`, re-run the install, and every task page on the board gets a "worker session transcript" link (opencode.ai share pages are public; the task content is open-source algorithm code).
 
 ## Backups
-A root cron job runs `/usr/local/bin/board-backup` daily at 01:17 UTC: it downloads the whole board (goals, tasks, deliverables, reviews, events, manager memory) to `/srv/backups/board-<date>.json` and keeps 14 days. Run it by hand with `sudo board-backup`. Restoring is manual: the export is plain JSON that `scripts/board.sh tasks-add` and `goals-sync` can be fed from.
+The backups are root-only (`/srv/backups` is mode 700 and hidden from the worker units), and the opencode sessions run without `WORKER_TOKEN` and `BOARD_URL` in their environment: a session is meant to see its task and `deps/`, nothing else of the board. The sessions still share one Unix user with the worker process, so this keeps an agent from stumbling on other work, not from a determined search. A root cron job runs `/usr/local/bin/board-backup` daily at 01:17 UTC: it downloads the whole board (goals, tasks, deliverables, reviews, events, manager memory) to `/srv/backups/board-<date>.json` and keeps 14 days. Run it by hand with `sudo board-backup`. Restoring is manual: the export is plain JSON that `scripts/board.sh tasks-add` and `goals-sync` can be fed from.
 
 ## Operate
 ```bash

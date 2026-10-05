@@ -12,6 +12,10 @@ const VERSION = "0.4.0";
 const env = process.env;
 const BOARD_URL = (env.BOARD_URL ?? "").replace(/\/$/, "");
 const TOKEN = env.WORKER_TOKEN ?? "";
+// What an opencode session inherits: everything except the board's address and token. A session works from TASK.md and
+// deps/ only; with the token it could export the whole board (every other session's memos) or act as the worker.
+const { WORKER_TOKEN: _token, BOARD_URL: _board, ...restEnv } = env;
+const sessionEnv = { ...restEnv, HOME: env.HOME ?? "/home/agent" };
 const WORKER_ID = env.WORKER_ID ?? `${hostname()}-${process.argv[2] ?? "1"}`;
 const HOST = hostname();
 const GOALS = (env.WORKER_GOALS ?? "").split(",").map((s) => s.trim()).filter(Boolean); // preferred goals; the board falls back to any goal
@@ -160,6 +164,7 @@ function taskMarkdown(task, reviews, depLines, seeded) {
     depLines.length ? `\n## Dependencies available in this workspace\n${depLines.join("\n")}` : "",
     ``,
     `## Rules for this workspace`,
+    `- Work only from this directory: TASK.md, \`deps/\`, your own files${task.kind === "doc" ? ", and the web" : ""}. Do not read anything else on this machine (other directories under /srv, backups, other tasks' workspaces, session stores) and do not call the task board; earlier work you were not given is withheld on purpose.`,
     `- Write EVERY deliverable file under \`out/\` (for example \`out/src/…\`, \`out/tests/…\`, \`out/MEMO.md\`). Files outside \`out/\` are not collected.`,
     `- Finish by writing \`out/REPORT.md\` with the sections: Summary, Files, ${task.kind === "doc" ? "Sources used" : "How I tested"}, Known gaps.`,
     ...(task.kind === "doc"
@@ -307,7 +312,7 @@ async function runTask(claim) {
 
   const prompt = "Read TASK.md in this directory and do exactly what it says. Work until the acceptance criteria are met, then make sure out/REPORT.md exists.";
   const args = ["run", "--auto", "--format", "json", "--model", MODEL, "--dir", ws, "--title", `task-${task.id}-${safeName(task.key)}`, prompt];
-  const child = spawn("opencode", args, { cwd: ws, env: { ...env, HOME: env.HOME ?? "/home/agent", OPENCODE_DISABLE_AUTOUPDATE: "1", NODE_OPTIONS: "--max-old-space-size=384" }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn("opencode", args, { cwd: ws, env: { ...sessionEnv, OPENCODE_DISABLE_AUTOUPDATE: "1", NODE_OPTIONS: "--max-old-space-size=384" }, stdio: ["ignore", "pipe", "pipe"] });
   current = { task, child };
 
   const hb = setInterval(async () => {
@@ -398,7 +403,7 @@ async function runTask(claim) {
   }
   if (tokens.input + tokens.output === 0 && sessionID) {
     try {
-      const exported = JSON.parse(execFileSync("opencode", ["export", sessionID], { encoding: "utf8", timeout: 30_000, env: { ...env, HOME: env.HOME ?? "/home/agent" } }));
+      const exported = JSON.parse(execFileSync("opencode", ["export", sessionID], { encoding: "utf8", timeout: 30_000, env: sessionEnv }));
       for (const msg of exported.messages ?? []) {
         const t = msg.info?.tokens ?? msg.tokens;
         if (!t) continue;
