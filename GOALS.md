@@ -46,6 +46,7 @@ Idea bank the manager maintains: `ideas: ideas-b2b`, title "DeepSpace B2B idea b
 4. Recurring themes (3 to 5 bullets: what several sessions keep circling, across both tables).
 5. Graveyard (at most 12 one-liners, each with its seen count and why).
 6. Changelog (last 5 rewrites).
+Taste notes the manager maintains: `taste: taste-b2b`, title "DeepSpace B2B taste notes". Yuke's feedback on rows of this bank becomes its Avoid and Prefer rules; the rules go into every ideation spec, decide what enters a table, and outrank the seen count (a row she dropped stays in the graveyard, a row she liked stays in its table).
 Promotion: an idea with seen 3× or more and fit 4 or more is promoted into the brief's ranked recommendations with the tag [enterprise]; Table 1 ideas are promoted with the tag [teams] under the same rule using plausibility in place of fit.
 
 Brief the manager maintains: `brief: gtm-b2b`, title "DeepSpace B2B go-to-market brief", under 1,800 words, rewritten in place after every run that accepted memos (never appended), with exactly these sections:
@@ -103,6 +104,7 @@ Idea bank the manager maintains: `ideas: ideas-outreach`, title "DeepSpace B2B o
 3. Recurring themes (3 to 5 bullets).
 4. Graveyard (at most 12 one-liners, each with its seen count and why).
 5. Changelog (last 5 rewrites).
+Taste notes the manager maintains: `taste: taste-outreach`, title "DeepSpace B2B outreach taste notes", used exactly as Goal C's are.
 Promotion: an idea with seen 3× or more and fit 4 or more is promoted into the brief's ranked recommendations.
 
 Brief the manager maintains: `brief: outreach-b2b`, title "DeepSpace B2B outreach brief", under 1,500 words, rewritten in place after every run that accepted memos (never appended), with exactly these sections:

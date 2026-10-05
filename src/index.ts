@@ -66,7 +66,7 @@ async function wakeManager(env: Env, stub: DurableObjectStub, origin: string, wh
  * Thin router. Authenticates and forwards to the single Board Durable Object with an `x-board-role` header the DO trusts.
  *
  * Nothing here is public. People see the board through the DeepSpace app (agent-board), which signs them in and calls
- * /app/* and GET /api/* with APP_TOKEN; the manager and builder routines use /manager/* (and the same read-only /api/*)
+ * /app/* (approve, project actions, feedback, goals, wake) and GET /api/* with APP_TOKEN; the manager and builder routines use /manager/* (and the same read-only /api/*)
  * with ORCHESTRATOR_TOKEN; the VM workers use /worker/* with WORKER_TOKEN. Every other request gets a bare 404.
  */
 export default {
@@ -135,6 +135,10 @@ export default {
             await patch({ status: body.outcome === "dropped" ? "dropped" : "done", result });
           } else return json({ error: "That action does not fit the project's current state. Reload the page." }, 409);
           return json({ ok: true, project: (await internal(`/api/projects/${id}`)).body });
+        }
+        if (parts[1] === "feedback" && !parts[2] && method === "POST") {
+          const r = await boardCall(stub, url.origin, "/manager/feedback", { doc_id: text(body.doc, 40), version: Number(body.version ?? 0), row: text(body.row, 12), idea: text(body.idea, 4000), kind: text(body.kind, 20), note: text(body.note, 500).replace(/\r\n?/g, "\n"), actor: who });
+          return json(r.body, r.status);
         }
         if (parts[1] === "goals" && !parts[2] && method === "GET") {
           try {

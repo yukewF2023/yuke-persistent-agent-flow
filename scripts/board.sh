@@ -43,6 +43,7 @@ for t in d["running"]: print("  #%d %s %s by %s since %s"%(t["id"],t["key"],t["s
 print("BLOCKED")
 for t in d["blocked"]: print("  #%d %s: %s"%(t["id"],t["key"],(t.get("last_error") or "")[:120]))
 print("NEEDS HUMAN"); [print("  - "+n["text"]) for n in d["needsHuman"]]
+print("FEEDBACK waiting: %d%s"%(d.get("feedbackOpen",0)," (scripts/board.sh feedback)" if d.get("feedbackOpen") else ""))
 print("PROJECTS"); [print("  P%d %s %s (%s) %s"%(p["id"],p["status"],p.get("slug") or "-",p["doc_id"],p["idea"][:80])) for p in d.get("projects",[]) if p["status"] not in ("done","dropped")]
 m=d["manager"]; print("MANAGER last run %s%s"%(ago(m["lastRunAt"])," · LOCKED" if m["lockedUntil"] else ""))
 cf=d.get("cloudflare") or {}
@@ -152,6 +153,13 @@ PY
   projects)      get "/manager/projects?status=${1:-}" | python3 -c 'import json,sys;[print("P%d %-9s %-24s %-15s %s%s"%(p["id"],p["status"],p.get("slug") or "-",p["doc_id"],p["idea"][:100],(" → "+p["result"]) if p.get("result") else "")) for p in json.load(sys.stdin)]' ;;
   project)       get "/manager/projects/${1:?project id}" | j ;;
   project-set)   send PATCH "/manager/projects/${1:?project id}" "${2:?json with status, slug, pr_url, result or note}" | j ;;
+  feedback)      get "/manager/feedback?status=${1:-open}" | python3 -c 'import json,sys,time
+for f in json.load(sys.stdin):
+    print("F%d %s %s %s%s"%(f["id"],f["status"],f["kind"],f.get("doc_id") or "-",(" v%d"%f["doc_version"]) if f.get("doc_version") else ""))
+    if f.get("idea"): print("   idea: "+f["idea"]); print("   row:  "+json.dumps(f.get("row") or {},ensure_ascii=False))
+    if f.get("note"): print("   note: "+f["note"])
+    if f.get("outcome"): print("   done: "+f["outcome"])' ;;
+  feedback-done) send PATCH "/manager/feedback/${1:?feedback id}" "{\"outcome\":$(printf '%s' "${2:?one line: what you did with it}" | jstr)}" | j ;;
   needs-human)   get /manager/needs-human | j ;;
   needs-human-add) send POST /manager/needs-human "{\"text\":$(printf '%s' "${1:?text}" | jstr)}" | j ;;
   needs-human-clear) send DELETE "/manager/needs-human/${1:-}" | j ;;

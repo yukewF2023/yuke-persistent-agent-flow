@@ -216,6 +216,31 @@ export interface ProjectLogEntry {
 export type Project = Omit<ProjectRow, "row" | "log"> & { row: Record<string, string>; log: ProjectLogEntry[] };
 export type ProjectSummary = Pick<ProjectRow, "id" | "slug" | "doc_id" | "idea" | "status" | "pr_url" | "session_url" | "result" | "note" | "created_at" | "updated_at">;
 
+/**
+ * Feedback: what the human said about one idea-bank row, or a free note to the manager. The manager acts on it in its next
+ * run (the row, and a rule in the goal's taste notes when it generalises) and closes it with one line saying what it did.
+ */
+export type FeedbackKind = "generic" | "not_for_us" | "known" | "sharpen" | "more" | "note";
+export interface FeedbackRow {
+  id: number;
+  who: string;
+  /** the document the feedback was given on (an idea bank for a row; any document, or null, for a note) */
+  doc_id: string | null;
+  doc_version: number | null;
+  /** the row's "Idea" cell as it stood (the bank is rewritten later; this copy is not); null for a note */
+  idea: string | null;
+  row: string | null; // JSON {column: cell}
+  kind: FeedbackKind;
+  note: string;
+  status: "open" | "handled";
+  /** one line from the manager: what it did with the feedback */
+  outcome: string | null;
+  created_at: number;
+  handled_at: number | null;
+}
+/** A feedback item as the API returns it. */
+export type Feedback = Omit<FeedbackRow, "row"> & { row: Record<string, string> | null };
+
 export interface SpendSummary {
   todayUsd: number;
   fiveHourUsd: number;
@@ -263,6 +288,8 @@ export interface BoardStatus {
   projects: ProjectSummary[];
   spend: SpendSummary;
   needsHuman: { ts: number; text: string }[];
+  /** feedback from the human that the manager has not handled yet (items at /api/feedback) */
+  feedbackOpen: number;
   events: EventRow[];
   /** live snapshots of the tasks in progress, keyed by task id (as posted by the workers; at most one per running task) */
   progress: Record<string, ProgressSnapshot>;

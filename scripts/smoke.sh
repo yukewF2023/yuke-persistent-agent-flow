@@ -139,6 +139,22 @@ R=$(curl -s "${M[@]}" -X PATCH "$U/manager/projects/$AID" -d '{"actor":"builder"
 R=$(curl -s "${A[@]}" -X POST "$U/app/projects/$AID" -d '{"action":"merged","who":"owner@example.com"}'); check "app records the merge" '"status": "active"' "$R"
 R=$(code "${A[@]}" -X POST "$U/app/projects/$AID" -d '{"action":"result","outcome":"done","result":""}'); check "app result needs a line" "400" "$R"
 R=$(curl -s "${A[@]}" -X POST "$U/app/projects/$AID" -d '{"action":"result","outcome":"dropped","result":"overlaps with another project","who":"owner@example.com"}'); check "app records the result" '"status": "dropped"' "$R"
+# ---- feedback: on an idea row, or a note to the manager ----
+R=$(curl -s "${A[@]}" -X POST "$U/app/feedback" -d "{\"doc\":\"ideas-smoke\",\"version\":$BV,\"row\":\"1.1\",\"idea\":\"Smoke idea one $RUN: send a built demo\",\"kind\":\"generic\",\"note\":\"any vendor could send this\",\"who\":\"owner@example.com\"}"); check "app sends feedback on a row" '"ok": true' "$R"; FID=$(echo "$R" | jget "d['id']"); echo "feedback $FID"
+R=$(curl -s "${A[@]}" -X POST "$U/app/feedback" -d "{\"doc\":\"ideas-smoke\",\"version\":0,\"row\":\"1.2\",\"idea\":\"Smoke idea one $RUN: send a built demo\",\"kind\":\"more\"}"); check "feedback with a stale row number falls back to the idea text" '"ok": true' "$R"; FID2=$(echo "$R" | jget "d['id']")
+R=$(curl -s "${A[@]}" -X POST "$U/app/feedback" -d '{"doc":"ideas-smoke","version":0,"row":"1.9","idea":"gone","kind":"generic"}'); check "feedback on a row that is gone → changed" '"error": "changed"' "$R"
+R=$(code "${A[@]}" -X POST "$U/app/feedback" -d '{"kind":"nope","note":"x"}'); check "feedback kind validated" "400" "$R"
+R=$(code "${A[@]}" -X POST "$U/app/feedback" -d '{"kind":"generic","note":"about nothing"}'); check "row feedback needs a row" "400" "$R"
+R=$(code "${A[@]}" -X POST "$U/app/feedback" -d '{"kind":"note","note":""}'); check "a note needs text" "400" "$R"
+R=$(curl -s "${A[@]}" -X POST "$U/app/feedback" -d '{"kind":"note","note":"fewer ideas that need a sales team","who":"owner@example.com"}'); check "app sends a note to the manager" '"ok": true' "$R"; FID3=$(echo "$R" | jget "d['id']")
+R=$(curl -s "${A[@]}" "$U/api/feedback"); check "feedback lists the row as it stood" '"Cheapest test": "10 sends"' "$R"; check "feedback records who sent it" '"who": "owner@example.com"' "$R"
+R=$(curl -s "${M[@]}" "$U/api/status"); check "status counts open feedback" '"feedbackOpen": ' "$R"
+R=$(code "${W[@]}" -X PATCH "$U/manager/feedback/$FID" -d '{"outcome":"x y z"}'); check "only the manager closes feedback" "401" "$R"
+R=$(code "${M[@]}" -X PATCH "$U/manager/feedback/$FID" -d '{"outcome":""}'); check "closing feedback needs an outcome" "400" "$R"
+R=$(curl -s "${M[@]}" -X PATCH "$U/manager/feedback/$FID" -d '{"outcome":"moved to the graveyard; rule added to taste-smoke"}'); check "manager closes feedback" '"status": "handled"' "$R"
+for F in $FID2 $FID3; do R=$(curl -s "${M[@]}" -X PATCH "$U/manager/feedback/$F" -d '{"outcome":"smoke cleanup"}'); done
+R=$(curl -s "${A[@]}" "$U/api/feedback?status=open"); check "handled feedback leaves the open list" "$(echo "$R" | grep -c "\"id\": $FID,")" "0"
+R=$(curl -s "${A[@]}" "$U/api/feedback?status=handled"); check "the outcome is kept" 'rule added to taste-smoke' "$R"
 R=$(curl -s "${A[@]}" "$U/app/goals"); check "app reads the goals file" '## Goal' "$R"
 R=$(code "${A[@]}" -X PUT "$U/app/goals" -d '{"content":"## Goal Z: x\n","sha":"abc","message":"m"}'); check "app goals save without a GitHub token → 503" "503" "$R"
 R=$(code "${A[@]}" -X POST "$U/app/wake" -d '{"reason":"smoke","who":"owner@example.com"}'); check "app wake goes through the same guard" "429" "$R"

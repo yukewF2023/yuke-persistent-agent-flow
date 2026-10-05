@@ -23,6 +23,7 @@ VM workers, manager routine, builder routine → this Worker with their own toke
 | `GET /app/config` | whether the builder trigger, the wake trigger and the GitHub token are configured |
 | `POST /app/projects` `{doc, version, row, idea, notes, who}` | approve an idea: records the project and fires the builder. `409 changed` when the bank moved on and the idea text is gone; `409 duplicate {id}` when the idea already has an open project |
 | `POST /app/projects/:id` `{action, outcome, result, who}` | `rebuild`, `merged`, or `result` (outcome `done` or `dropped`, with one line) |
+| `POST /app/feedback` `{doc, version, row, idea, kind, note, who}` | feedback on one idea-bank row (kind `generic`, `not_for_us`, `known`, `sharpen` or `more`; the row is found and copied as in an approval, `409 changed` when it is gone) or a note to the manager (kind `note`, no `idea`). Listed at `GET /api/feedback`; the manager closes each item with one line (`scripts/board.sh feedback`, `feedback-done`) |
 | `GET /app/goals`, `PUT /app/goals` `{content, sha, message, who}` | read and commit GOALS.md through the GitHub contents API |
 | `POST /app/wake` `{reason, who}` | fire the manager routine, with the same guards as `scripts/board.sh wake` |
 

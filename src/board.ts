@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { ideaRows } from "./ideas";
-import type { BoardStatus, DeliverableRow, DocMeta, DocRow, Env, EventRow, GoalRow, LiveStatus, ProgressRow, ProgressSnapshot, Project, ProjectLogEntry, ProjectRow, ProjectStatus, ProjectSummary, ReviewRow, Role, SpendSummary, TaskRow, TaskStatus, WorkerRow } from "./types";
+import type { BoardStatus, DeliverableRow, DocMeta, DocRow, Env, EventRow, Feedback, FeedbackKind, FeedbackRow, GoalRow, LiveStatus, ProgressRow, ProgressSnapshot, Project, ProjectLogEntry, ProjectRow, ProjectStatus, ProjectSummary, ReviewRow, Role, SpendSummary, TaskRow, TaskStatus, WorkerRow } from "./types";
 import { json, readJson, secondsToUtcMidnight, utcDayStart } from "./util";
 
 /** OpenCode Go usage windows in USD (the workers' model provider). */
@@ -28,6 +28,11 @@ const DOC_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const PROJECT_STATUSES: ProjectStatus[] = ["approved", "building", "ready", "active", "done", "dropped", "failed"];
 const PROJECT_LOG_KEEP = 30;
 const PROJECT_SLUG = /^[a-z0-9]+(-[a-z0-9]+){0,5}$/;
+/** Feedback from the human: on one idea-bank row (any kind) or a free note to the manager (kind "note"). */
+const FEEDBACK_KINDS: FeedbackKind[] = ["generic", "not_for_us", "known", "sharpen", "more", "note"];
+const FEEDBACK_NOTE_MAX = 500;
+const FEEDBACK_OPEN_MAX = 40;
+const FEEDBACK_KEEP_MS = 30 * 86_400_000;
 const KINDS = ["ts", "py", "check", "other", "doc"];
 const TERMINAL: TaskStatus[] = ["accepted", "rejected", "cancelled"];
 
@@ -163,6 +168,8 @@ export class Board extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT, doc_id TEXT NOT NULL, doc_version INTEGER NOT NULL, idea TEXT NOT NULL, row TEXT NOT NULL,
         notes TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'approved', pr_url TEXT, session_url TEXT, result TEXT, note TEXT, log TEXT NOT NULL DEFAULT '[]',
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS feedback (id INTEGER PRIMARY KEY AUTOINCREMENT, who TEXT NOT NULL, doc_id TEXT, doc_version INTEGER, idea TEXT, row TEXT,
+        kind TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open', outcome TEXT, created_at INTEGER NOT NULL, handled_at INTEGER);
       DROP INDEX IF EXISTS progress_updated;
     `);
     // additive migrations (SQLite has no ADD COLUMN IF NOT EXISTS)
@@ -197,6 +204,7 @@ export class Board extends DurableObject<Env> {
         const pr = this.projectGet(Number(p[2]));
         return pr ? json(pr) : json({ error: "not found" }, 404);
       }
+      if (m === "GET" && p[0] === "api" && p[1] === "feedback" && !p[2]) return json(this.listFeedback(url));
       if (m === "GET" && p[0] === "api" && p[1] === "tasks" && !p[2]) return json(this.listTasks(url));
       if (m === "GET" && p[0] === "api" && p[1] === "tasks" && p[2] && p[3] === "progress") return this.progressDetail(Number(p[2]));
       if (m === "GET" && p[0] === "api" && p[1] === "tasks" && p[2]) return this.taskDetail(Number(p[2]));
@@ -262,6 +270,7 @@ export class Board extends DurableObject<Env> {
       projects: this.q<ProjectSummary>("SELECT id, slug, doc_id, idea, status, pr_url, session_url, result, note, created_at, updated_at FROM projects ORDER BY id DESC LIMIT 40"),
       spend: this.spendSummary(now),
       needsHuman: this.kvJson<{ ts: number; text: string }[]>("needs_human") ?? [],
+      feedbackOpen: Number(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM feedback WHERE status = 'open'")?.n ?? 0),
       events,
       progress,
       manager: { lastRunAt: this.kvGet("manager:last_run_at") ? Number(this.kvGet("manager:last_run_at")) : null, lockedUntil: lock > now ? lock : null },
@@ -743,6 +752,9 @@ export class Board extends DurableObject<Env> {
       return pr ? json(pr) : json({ error: "not found" }, 404);
     }
     if (p[0] === "projects" && p[1] && m === "PATCH") return this.projectPatch(Number(p[1]), await readJson(request), now);
+    if (p[0] === "feedback" && !p[1] && m === "GET") return json(this.listFeedback(url));
+    if (p[0] === "feedback" && !p[1] && m === "POST") return this.feedbackCreate(await readJson(request), now);
+    if (p[0] === "feedback" && p[1] && m === "PATCH") return this.feedbackHandle(Number(p[1]), await readJson(request), now);
     if (p[0] === "pace" && m === "PUT") {
       const body = await readJson<{ usd_per_day?: unknown }>(request);
       const v = num(body.usd_per_day);
@@ -820,8 +832,9 @@ export class Board extends DurableObject<Env> {
         now - 14 * 86_400_000
       );
       const progress = this.run("DELETE FROM progress WHERE updated_at < ?", now - PROGRESS_KEEP_MS);
+      const feedback = this.run("DELETE FROM feedback WHERE status = 'handled' AND handled_at < ?", now - FEEDBACK_KEEP_MS);
       this.touch();
-      return json({ ok: true, deleted: { events, spend, deliverables, progress } });
+      return json({ ok: true, deleted: { events, spend, deliverables, progress, feedback } });
     }
     return json({ error: "not found" }, 404);
   }
@@ -956,6 +969,78 @@ export class Board extends DurableObject<Env> {
     this.event(who, "project.update", null, `P${id}${pr.slug ? ` ${pr.slug}` : ""}: ${status}${text ? ` · ${text}` : ""}`);
     this.touch();
     return json({ ok: true, project: this.projectGet(id) });
+  }
+
+  // ---- feedback: what the human said about an idea-bank row, or a note to the manager ----
+  private feedbackOut(r: FeedbackRow): Feedback {
+    let row: Record<string, string> | null = null;
+    try {
+      row = r.row ? (JSON.parse(r.row) as Record<string, string>) : null;
+    } catch {}
+    return { ...r, row };
+  }
+  /** GET /api/feedback[?status=open|handled] — without a status: everything open, then the last 20 handled. */
+  private listFeedback(url: URL): Feedback[] {
+    const status = url.searchParams.get("status");
+    const open = status === "handled" ? [] : this.q<FeedbackRow>("SELECT * FROM feedback WHERE status = 'open' ORDER BY id");
+    const handled = status === "open" ? [] : this.q<FeedbackRow>("SELECT * FROM feedback WHERE status = 'handled' ORDER BY handled_at DESC, id DESC LIMIT 20");
+    return open.concat(handled).map((r) => this.feedbackOut(r));
+  }
+  /**
+   * POST /manager/feedback {doc_id, version, row, idea, kind, note, actor} — the human's feedback. With `idea`, it is about one
+   * row of an idea bank, found and copied the way an approval is (by position at the same version, otherwise by exact idea
+   * text; 409 "changed" when neither matches). Without, it is a note to the manager (kind "note", text required), and
+   * `doc_id` only says which document she was reading.
+   */
+  private feedbackCreate(body: Record<string, unknown>, now: number): Response {
+    const kind = str(body.kind, 20) as FeedbackKind;
+    if (!FEEDBACK_KINDS.includes(kind)) return json({ error: `kind must be one of ${FEEDBACK_KINDS.join(", ")}` }, 400);
+    const note = str(body.note, FEEDBACK_NOTE_MAX).trim();
+    const docId = str(body.doc_id, 40);
+    const text = str(body.idea, 4000);
+    const d = docId ? this.docGet(docId) : null;
+    if (docId && !d) return json({ error: "no such document" }, 404);
+    let row: { idea: string; cells: Record<string, string> } | undefined;
+    if (text) {
+      if (!d) return json({ error: "feedback on an idea needs its idea bank" }, 400);
+      const rows = ideaRows(d.body);
+      row = num(body.version) === d.version ? rows.find((r) => r.ref === str(body.row, 12) && r.idea === text) : undefined;
+      if (!row) {
+        const same = rows.filter((r) => r.idea === text);
+        if (same.length === 1) row = same[0];
+      }
+      if (!row) return json({ error: "changed", version: d.version }, 409);
+    } else if (kind !== "note") return json({ error: "this kind of feedback is about one idea; send its row" }, 400);
+    if (kind === "note" && !note) return json({ error: "Write the note first." }, 400);
+    if (Number(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM feedback WHERE status = 'open'")?.n ?? 0) >= FEEDBACK_OPEN_MAX)
+      return json({ error: `${FEEDBACK_OPEN_MAX} pieces of feedback are waiting for the manager already; it handles them on its next run` }, 429);
+    const who = str(body.actor, 40) || "human";
+    this.run(
+      "INSERT INTO feedback(who, doc_id, doc_version, idea, row, kind, note, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+      who,
+      d?.id ?? null,
+      d?.version ?? null,
+      row?.idea ?? null,
+      row ? JSON.stringify(row.cells) : null,
+      kind,
+      note,
+      now
+    );
+    const id = Number(this.one<{ id: number }>("SELECT last_insert_rowid() AS id")?.id ?? 0);
+    this.event(who, "feedback.add", null, `F${id} ${kind}${d ? ` on ${d.id}` : ""}${row ? `: ${row.idea.slice(0, 160)}` : ""}${note ? ` — ${note.slice(0, 200)}` : ""}`);
+    this.touch();
+    return json({ ok: true, id });
+  }
+  /** PATCH /manager/feedback/:id {outcome} — the manager closes an item with one line saying what it did. */
+  private feedbackHandle(id: number, body: Record<string, unknown>, now: number): Response {
+    const r = Number.isInteger(id) ? this.one<FeedbackRow>("SELECT * FROM feedback WHERE id = ?", id) : undefined;
+    if (!r) return json({ error: "not found" }, 404);
+    const outcome = str(body.outcome, 300).trim();
+    if (outcome.length < 3) return json({ error: "outcome required: one line saying what you did with the feedback" }, 400);
+    this.run("UPDATE feedback SET status = 'handled', outcome = ?, handled_at = ? WHERE id = ?", outcome, now, id);
+    this.event(str(body.actor, 40) || "manager", "feedback.done", null, `F${id}: ${outcome}`);
+    this.touch();
+    return json({ ok: true, feedback: this.feedbackOut({ ...r, status: "handled", outcome, handled_at: now }) });
   }
 
   private createTasks(body: unknown, now: number): Response {
