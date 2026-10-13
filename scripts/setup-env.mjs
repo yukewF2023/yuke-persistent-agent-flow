@@ -57,7 +57,7 @@ if (!goKey) {
 console.log(goKey ? "  OPENCODE_API_KEY: from ~/.local/share/opencode/auth.json" : "  OPENCODE_API_KEY: MISSING — run `opencode auth login` (OpenCode Go) and re-run");
 mkdirSync(dirname(VM_ENV), { recursive: true });
 const goals1 = vmVars.WORKER_GOALS_1 ?? "F";
-const goals2 = vmVars.WORKER_GOALS_2 ?? "G";
+const goals2 = vmVars.WORKER_GOALS_2 ?? "H";
 console.log(`  WORKER_GOALS_1=${goals1} WORKER_GOALS_2=${goals2} (edit worker/agent-worker.env to change; install.sh writes them to the VM)`);
 writeFileSync(
   VM_ENV,

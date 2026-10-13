@@ -36,7 +36,7 @@ fi
 sed -i '/^BACKUP_TOKEN=/d' /etc/agent-worker.env
 v="$(grep '^BACKUP_TOKEN=' "$SRC/agent-worker.env" 2>/dev/null | cut -d= -f2- || true)"
 if [ -n "$v" ]; then printf 'BACKUP_TOKEN=%s\n' "$v" > /etc/agent-board-backup.env; chown root:root /etc/agent-board-backup.env; chmod 600 /etc/agent-board-backup.env; fi
-# per-worker preferences: WORKER_GOALS_1=F / WORKER_GOALS_2=G in the shipped agent-worker.env become /etc/agent-worker-<n>.env
+# per-worker preferences: WORKER_GOALS_1=F / WORKER_GOALS_2=H in the shipped agent-worker.env become /etc/agent-worker-<n>.env
 for i in 1 2; do
   v="$(grep "^WORKER_GOALS_$i=" "$SRC/agent-worker.env" 2>/dev/null | cut -d= -f2- || true)"
   if [ -n "$v" ]; then printf 'WORKER_GOALS=%s\n' "$v" > "/etc/agent-worker-$i.env"; chmod 644 "/etc/agent-worker-$i.env"; echo "worker $i prefers goals $v"; fi
