@@ -8,18 +8,17 @@ const HELP = `usage:
   search x "<query>" [--days N] [--top]          X posts (Latest by default; --top for most engaged)
   search x-thread <post url or id>               the thread a post belongs to
   search x-replies <post url or id>              replies to a post, most relevant first
-  search reddit "<query>" [--days N]             Reddit posts and comments
+  search reddit "<query>"                        Reddit threads, through Google (any age: no date window)
   search web "<query>" [--days N] [--domains a.com,b.com]   articles, blogs, newsletters
   search news "<query>" [--days N]               news articles
   search hn "<query>" [--days N]                 Hacker News stories and comments (free)
   search hn-thread <item url or id>              a Hacker News discussion (free)
   search forum <retool|bubble|n8n> "<query>" [--days N]   a tool's community forum (free)
   search forum-topic <topic url>                 one forum topic's posts (free)
-  search linkedin "<query>" [--days N]           LinkedIn posts, as Google indexes them
-  search review <url>                            one review page on g2.com, capterra.com or trustradius.com
+  search review <url>                            one review page on capterra.com or trustradius.com
 --days defaults to 14 (at most 30). Each call prints its results, what it cost, and what is left of this attempt's budget.`;
 
-const QUERY_SOURCES = new Set(["x", "reddit", "web", "news", "hn", "linkedin"]);
+const QUERY_SOURCES = new Set(["x", "reddit", "web", "news", "hn"]);
 const URL_SOURCES = new Set(["x-thread", "x-replies", "hn-thread", "forum-topic", "review"]);
 const TEXT_SHOWN = 400;
 

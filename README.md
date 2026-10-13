@@ -82,7 +82,7 @@ GCP e2-micro VM: agent-worker@1, agent-worker@2 ───────┴── B
 | Item | Monthly |
 |---|---|
 | OpenCode Go (the workers' model) | $10, with a $60 usage allowance; the board paces spend at $1.60/day by default (`scripts/board.sh pace`) |
-| Live search for listening tasks (DeepSpace integrations: X via twitterapi.io, Exa, SerpAPI, Firecrawl; Hacker News and the forums are free) | up to $30, billed to the DeepSpace account that owns the agent-board app; the board caps it at $1/day (`scripts/board.sh search-pace`), $0.15 and 25 calls per task attempt |
+| Live search for listening tasks (DeepSpace integrations: X via twitterapi.io, Reddit via SerpAPI, Exa for the web and news, Firecrawl for review pages; Hacker News and the forums are free) | up to $30, billed to the DeepSpace account that owns the agent-board app; the board caps it at $1/day (`scripts/board.sh search-pace`), $0.15 and 25 calls per task attempt |
 | GCP e2-small VM (2 GB) + external IPv4 | about $12 (1 GB e2-micro was too small for two opencode sessions) |
 | Cloudflare Worker + Durable Object | $0 (free tier: 5M row reads and 100k writes a day; the board uses well under 1M reads on a busy day, and the status page shows today's usage) |
 | Claude manager | on the existing Claude plan |

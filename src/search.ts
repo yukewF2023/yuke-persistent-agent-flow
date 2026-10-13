@@ -12,17 +12,18 @@
 
 /**
  * The sources the gateway serves. `est` is what one call is expected to cost (booked against the budget before the
- * call), `worst` what it may cost when the outcome is unknown (the api-worker's reservation, marked up). USD.
+ * call; measured on 2026-10-13), `worst` what it may cost when the outcome is unknown (the api-worker's reservation,
+ * marked up). USD. Reddit goes through Google (Exa does not index it); there is no LinkedIn source (Google's results
+ * were unusable).
  */
 export const SEARCH_SOURCES: Record<string, { est: number; worst: number }> = {
   x: { est: 0.004, worst: 0.0078 },
-  "x-thread": { est: 0.006, worst: 0.0195 },
-  "x-replies": { est: 0.006, worst: 0.0195 },
-  reddit: { est: 0.02, worst: 0.65 },
-  web: { est: 0.02, worst: 0.65 },
-  news: { est: 0.02, worst: 0.65 },
-  linkedin: { est: 0.0325, worst: 0.0325 },
-  review: { est: 0.03, worst: 0.65 },
+  "x-thread": { est: 0.004, worst: 0.0195 },
+  "x-replies": { est: 0.004, worst: 0.0195 },
+  reddit: { est: 0.0325, worst: 0.0325 },
+  web: { est: 0.01, worst: 0.65 },
+  news: { est: 0.01, worst: 0.65 },
+  review: { est: 0.005, worst: 0.65 },
   hn: { est: 0, worst: 0 },
   "hn-thread": { est: 0, worst: 0 },
   forum: { est: 0, worst: 0 },
