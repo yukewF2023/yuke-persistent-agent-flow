@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Bootstraps a Debian 12 VM as the worker host. Idempotent. Run as root from a copy of this directory:
 #   sudo bash /tmp/worker/install.sh
-# Expects /etc/agent-worker.env (BOARD_URL, WORKER_TOKEN, OPENCODE_API_KEY, OPENCODE_MODEL) or ./agent-worker.env next to this script.
+# Expects /etc/agent-worker.env (BOARD_URL, WORKER_TOKEN, OPENCODE_API_KEY, OPENCODE_MODEL) or ./agent-worker.env next to this script;
+# BACKUP_TOKEN and WORKER_GOALS_<n> are read from ./agent-worker.env on every run.
 set -euo pipefail
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENCODE_VERSION="${OPENCODE_VERSION:-1.18.32}"
@@ -28,14 +29,25 @@ id agent >/dev/null 2>&1 || useradd -m -s /bin/bash agent
 mkdir -p /srv/agent /srv/work /srv/templates /srv/lock
 if [ ! -f /etc/agent-worker.env ]; then
   [ -f "$SRC/agent-worker.env" ] || { echo "missing /etc/agent-worker.env (or $SRC/agent-worker.env)"; exit 1; }
-  install -m 600 -o root -g root "$SRC/agent-worker.env" /etc/agent-worker.env
+  grep -v -E '^(BACKUP_TOKEN|WORKER_GOALS_[0-9]+)=' "$SRC/agent-worker.env" > /etc/agent-worker.env
+  chown root:root /etc/agent-worker.env && chmod 600 /etc/agent-worker.env
 fi
-# per-worker preferences: WORKER_GOALS_1=C / WORKER_GOALS_2=E in the shipped agent-worker.env become /etc/agent-worker-<n>.env
+# the backup's own token lives in a root-only file the worker units never load (it exports the whole board)
+sed -i '/^BACKUP_TOKEN=/d' /etc/agent-worker.env
+v="$(grep '^BACKUP_TOKEN=' "$SRC/agent-worker.env" 2>/dev/null | cut -d= -f2- || true)"
+if [ -n "$v" ]; then printf 'BACKUP_TOKEN=%s\n' "$v" > /etc/agent-board-backup.env; chown root:root /etc/agent-board-backup.env; chmod 600 /etc/agent-board-backup.env; fi
+# per-worker preferences: WORKER_GOALS_1=F / WORKER_GOALS_2=G in the shipped agent-worker.env become /etc/agent-worker-<n>.env
 for i in 1 2; do
   v="$(grep "^WORKER_GOALS_$i=" "$SRC/agent-worker.env" 2>/dev/null | cut -d= -f2- || true)"
   if [ -n "$v" ]; then printf 'WORKER_GOALS=%s\n' "$v" > "/etc/agent-worker-$i.env"; chmod 644 "/etc/agent-worker-$i.env"; echo "worker $i prefers goals $v"; fi
 done
 install -m 755 "$SRC/worker.mjs" /srv/agent/worker.mjs
+# live search for `listen` sessions: root-owned, outside anything the agent user can write
+install -m 755 -o root -g root "$SRC/search.mjs" /usr/local/bin/search
+# The worker runs from an execute-only copy of node: the kernel marks a process that execs a binary it cannot read as
+# non-dumpable, so its /proc/<pid>/environ, mem and fd (WORKER_TOKEN) are closed to the sessions, which run as the same
+# user. Copied on every install so a node upgrade is picked up.
+install -m 0111 -o root -g root "$(command -v node)" /srv/agent/node-noread
 install -m 755 "$SRC/run-tests" /srv/templates/run-tests
 install -m 755 "$SRC/board-backup" /usr/local/bin/board-backup
 # root-only: the export holds every memo, and a worker session once read it to recover memos it was not given
@@ -80,6 +92,8 @@ for d in /home/agent/.local/share/opencode /srv/agent/xdg-1/opencode /srv/agent/
   chmod 600 "$d/auth.json"
 done
 chown -R agent:agent /srv/work /srv/templates /srv/lock /srv/agent/xdg-1 /srv/agent/xdg-2 /home/agent
+# every workspace gets a copy of run-tests; the template copy stays root's so no session can change the next one
+chown root:root /srv/templates/run-tests
 
 echo "== systemd"
 install -m 644 "$SRC/agent-worker@.service" /etc/systemd/system/agent-worker@.service
