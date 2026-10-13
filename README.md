@@ -8,9 +8,9 @@ The board, for people: **https://agent-board.app.space** (the `agent-board` Deep
 
 Think of a small team with one manager and two junior engineers who never sleep.
 
-- **You** write what you want in one file, `GOALS.md`. Today that is Goal C, "a standing research desk on how DeepSpace wins business customers", and Goal E, a desk of outreach research and ideas on how DeepSpace reaches those buyers first; Goal D (the same desk for individual builders) was paused on 2026-09-30 and can be switched back on with one line, and the earlier Goal A (a TypeScript algorithms library) and Goal B (its Python port with cross-checks) are retired.
-- **The manager is Claude.** Twice an hour (and within a minute of any push to `main`) it wakes up in a fresh sandbox, reads the goals, and looks at the board. For code tasks it downloads the files and actually runs the tests and type checks: accept, or send back with numbered fixes, or block after three attempts and flag it for you. For research tasks it reads the memo, keeps what is sourced and specific, and then rewrites the goal's **brief** on the board, a living one-page summary for you that it maintains in place (ranked recommendations, what we know, competitor table, open questions), never a growing log. Then it tops up the queue from the goal's catalog, in rounds, so the desk never runs dry. It saves a tiny note to itself and goes back to sleep.
-- **The engineers are DeepSeek.** Two worker processes on a small VM sit in a loop: ask the board for the next task (worker 1 prefers Goal C, worker 2 prefers Goal E), get a fresh folder with the spec, run an `opencode` session with DeepSeek V4.1 Flash that does the work (code and tests, or web research and a memo), package everything under `out/` plus a short report, hand it in, and ask for the next one. If a session hangs or the VM restarts, the lease expires and the task simply goes back on the board.
+- **You** write what you want in one file, `GOALS.md`. Today that is Goal F, "a standing listening desk on how businesses like DeepSpace won their first clients", and Goal G, a listening desk on what people say when they need software built; both search what real people post (X, Reddit, Hacker News, tool forums, the web) and cite it. Goals C and E, the brainstorming desks on business customers and outreach, were finished on 2026-10-13 and their briefs and idea banks stay on the board as they stood; Goal D (the same desk for individual builders) was paused on 2026-09-30 and can be switched back on with one line, and the earlier Goal A (a TypeScript algorithms library) and Goal B (its Python port with cross-checks) are retired.
+- **The manager is Claude.** Twice an hour (and within a minute of any push to `main`) it wakes up in a fresh sandbox, reads the goals, and looks at the board. For code tasks it downloads the files and actually runs the tests and type checks: accept, or send back with numbered fixes, or block after three attempts and flag it for you. For research tasks it reads the memo (for listening tasks, after checking every cited post against the task's search log), keeps what is sourced and specific, and then rewrites the goal's **brief** on the board, a living one-page summary for you that it maintains in place (ranked recommendations, what we know, competitor table, open questions), never a growing log. Then it tops up the queue from the goal's catalog, in rounds, so the desk never runs dry. It saves a tiny note to itself and goes back to sleep.
+- **The engineers are DeepSeek.** Two worker processes on a small VM sit in a loop: ask the board for the next task (worker 1 prefers Goal F, worker 2 prefers Goal G), get a fresh folder with the spec, run an `opencode` session with DeepSeek V4.1 Flash that does the work (code and tests, web research and a memo, or live searches with the `search` command and a memo), package everything under `out/` plus a short report, hand it in, and ask for the next one. If a session hangs or the VM restarts, the lease expires and the task simply goes back on the board.
 - **The board is a Cloudflare Worker.** It is the only shared memory: goals, tasks, who holds what, submitted files, reviews, a log, and spend. Nothing on it is public: people see it through a small DeepSpace app, `agent-board`, that signs them in and lets only the owner through.
 - **Money is the throttle.** Each task's tokens are priced at OpenCode Go rates and the board releases the day's pace hour by hour (default $1.60 a day, 20 % at 00:00 UTC and the rest spread over the day), refusing new claims when spend runs ahead of it; a human can release a one-day extra on top. So "constantly working" means the workers are always either running a task or waiting a few minutes for budget, never waiting for a human.
 
@@ -43,7 +43,7 @@ A task moves through these states:
 
 | What | Where |
 |---|---|
-| The briefs the manager maintains for you (one per research goal, rewritten in place, with a change log) | https://agent-board.app.space/docs/gtm-b2b and `/docs/outreach-b2b` (the paused B2C desk's `/docs/gtm-b2c` stays as it stood), listed under "Briefs for you" on the Overview; from a shell, `scripts/board.sh doc-get <id>` |
+| The briefs the manager maintains for you (one per research goal, rewritten in place, with a change log) | https://agent-board.app.space/docs/listen-f and `/docs/listen-g` (the finished desks' `/docs/gtm-b2b` and `/docs/outreach-b2b`, and the paused B2C desk's `/docs/gtm-b2c`, stay as they stood), listed under "Briefs for you" on the Overview; from a shell, `scripts/board.sh doc-get <id>` |
 | The board: a status strip (workers, ready, in progress, review, accepted today, blocked, spend, manager) above tabs: **Overview** (pipeline bar, agents, needs-attention, recent activity, goals progress), **Pipeline** (ready / in progress / review / accepted / blocked columns), **Agents** (the manager and each worker, live), **Goals** (progress and the goal bodies), **Activity** (every event, filterable), **Budget** (Go windows, last 7 days, Cloudflare free tier) | https://agent-board.app.space/home — the tab is in the URL hash (`/#pipeline`, `/#agents`, `/#activity`…), so a bookmark opens straight to it; with JavaScript off the same page shows every section top to bottom |
 | One task: spec, acceptance checklist, every review verdict, the report and the files | click any task in the app (`/tasks/<id>`) |
 | What a worker is doing right now: step, current tool call, tokens and cost so far, the last 30 session events | the [Agents tab](https://agent-board.app.space/home#agents) (refreshes every 20 s) and the "Live session" section of the running task's page |
@@ -66,6 +66,7 @@ Claude routine (Sonnet 5, every 30 min + on push) ─────┼── Beare
                                                        │                                  no public pages
 GCP e2-micro VM: agent-worker@1, agent-worker@2 ───────┴── Bearer WORKER_TOKEN ─────────▶ claim · heartbeat · submit · deps
   each task = one fresh `opencode run` (DeepSeek V4.1 Flash via OpenCode Go)
+  a `listen` session: `search …` ── per-task key ──▶ board /search ── SEARCH_GATEWAY_TOKEN ──▶ agent-board app /api/research ──▶ DeepSpace integrations
 ```
 
 1. **Goals** live in [GOALS.md](GOALS.md). A human edits that file and nothing else, on the app's `/goals` page or with git; every push to `main` wakes the manager.
@@ -81,6 +82,7 @@ GCP e2-micro VM: agent-worker@1, agent-worker@2 ───────┴── B
 | Item | Monthly |
 |---|---|
 | OpenCode Go (the workers' model) | $10, with a $60 usage allowance; the board paces spend at $1.60/day by default (`scripts/board.sh pace`) |
+| Live search for listening tasks (DeepSpace integrations: X via twitterapi.io, Exa, SerpAPI, Firecrawl; Hacker News and the forums are free) | up to $30, billed to the DeepSpace account that owns the agent-board app; the board caps it at $1/day (`scripts/board.sh search-pace`), $0.15 and 25 calls per task attempt |
 | GCP e2-small VM (2 GB) + external IPv4 | about $12 (1 GB e2-micro was too small for two opencode sessions) |
 | Cloudflare Worker + Durable Object | $0 (free tier: 5M row reads and 100k writes a day; the board uses well under 1M reads on a busy day, and the status page shows today's usage) |
 | Claude manager | on the existing Claude plan |
@@ -89,7 +91,8 @@ GCP e2-micro VM: agent-worker@1, agent-worker@2 ───────┴── B
 
 ```bash
 npm install
-npm run setup:env        # generates ORCHESTRATOR_TOKEN, WORKER_TOKEN and APP_TOKEN into .dev.vars, and worker/agent-worker.env for the VM
+npm run setup:env        # generates ORCHESTRATOR_TOKEN, WORKER_TOKEN, APP_TOKEN, BACKUP_TOKEN, SEARCH_KEY_SECRET and SEARCH_GATEWAY_TOKEN into .dev.vars, and worker/agent-worker.env for the VM
+                         # (SEARCH_GATEWAY_TOKEN also goes into the agent-board app: npx deepspace secrets set SEARCH_GATEWAY_TOKEN)
 npm run check            # typecheck
 npm run dev              # http://localhost:8787 (JSON only; run the agent-board app beside it to see pages)
 npm run secrets:push     # pushes .dev.vars to the Worker
@@ -108,10 +111,10 @@ Workers: see [worker/README.md](worker/README.md) (three gcloud commands). Manag
 ## Layout
 
 ```
-GOALS.md            the goals (C: DeepSpace B2B go-to-market desk; E: DeepSpace B2B outreach desk; D: DeepSpace B2C growth desk, paused; A and B, the algorithms library and its Python port, retired)
+GOALS.md            the goals (F: B2B acquisition listening desk; G: custom-software demand listening desk; C and E: the B2B go-to-market and outreach desks, done; D: DeepSpace B2C growth desk, paused; A and B, the algorithms library and its Python port, retired)
 manager/            PROMPT.md (the manager loop), ROUTINE.md (how the routine is configured)
-worker/             worker.mjs (the loop), install.sh (VM bootstrap), agent-worker@.service, templates/, run-tests, README.md
-scripts/            board.sh (CLI), monitor.sh, setup-env.mjs
-src/                index.ts (router), board.ts (Durable Object), ideas.ts (idea-bank rows), github.ts (GOALS.md commits), util.ts, types.ts
+worker/             worker.mjs (the loop), search.mjs (the `search` command of listening sessions), install.sh (VM bootstrap), agent-worker@.service, templates/, run-tests, README.md
+scripts/            board.sh (CLI), verify-citations.py (a listening memo against its search log), monitor.sh, setup-env.mjs, smoke.sh + smoke-gateway.py
+src/                index.ts (router), board.ts (Durable Object), search.ts (per-task search keys and source prices), ideas.ts (idea-bank rows), github.ts (GOALS.md commits), util.ts, types.ts
 docs/               PLAN.md (design), PROJECTS.md (approve an idea → a Cowork project), HANDOFF.md (state for the next session)
 ```

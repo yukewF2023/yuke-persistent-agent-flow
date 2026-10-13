@@ -36,6 +36,8 @@ for g in d["goals"]:
 print("WORKERS")
 for w in d["workers"]: print("  %s (%s) last seen %s · task %s · %s · done %d failed %d"%(w["id"],w.get("host") or "?",ago(w["last_seen"]),w.get("task_key") or "-",w.get("note") or "",w["tasks_done"],w["tasks_failed"]))
 s=d["spend"]; print("SPEND today $%.3f / pace $%.2f · 5h $%.2f/12 · week $%.2f/30 · month $%.2f/60 · tasks today %d%s"%(s["todayUsd"],s["paceUsdPerDay"],s["fiveHourUsd"],s["weekUsd"],s["monthUsd"],s["todayTasks"],(" · PACING: "+s["pacing"]["reason"]) if s["pacing"] else ""))
+q=d.get("search") or {}
+if q: print("SEARCH today $%.3f / $%.2f · %d calls%s"%(q["todayUsd"],q["capUsdPerDay"],q["calls"],(" · PAUSED until "+time.strftime("%H:%MZ",time.gmtime(q["pausedUntil"]/1000))) if q.get("pausedUntil") else ""))
 print("REVIEW QUEUE (%d)"%len(d["reviewQueue"]))
 for t in d["reviewQueue"]: print("  #%d %s attempt %d submitted %s"%(t["id"],t["key"],t["attempt"],ago(t["submitted_at"])))
 print("IN PROGRESS")
@@ -80,8 +82,14 @@ for dep in t["deps"]:
     req=urllib.request.Request(f"{url}/manager/tasks/{dep}",headers={"Authorization":"Bearer "+tok,"User-Agent":"board.sh/0.2 (curl-equivalent)"})
     d=json.load(urllib.request.urlopen(req)); dd=d.get("deliverable")
     if dd: write(os.path.join(root,"deps",safe(d["task"]["key"])),dd["files"],dd["report"])
+log=None
+if t["kind"]=="listen":
+    # every search call of every attempt, with what the session saw: verify-citations checks the memo against it
+    req=urllib.request.Request(f"{url}/manager/tasks/{t['id']}/search-log",headers={"Authorization":"Bearer "+tok,"User-Agent":"board.sh/0.2 (curl-equivalent)"})
+    log=json.load(urllib.request.urlopen(req)); json.dump(log,open(os.path.join(root,"SEARCH_LOG.json"),"w"),indent=1)
 print(f"TASK #{t['id']} {t['key']} kind={t['kind']} attempt={t['attempt']}/{t['max_attempts']} goal={t['goal_id']} title={t['title']}")
 print(f"DIR {root}")
+if log is not None: print(f"SEARCH LOG {len(log)} calls, {sum(c.get('n_results') or 0 for c in log)} results, ${sum(c.get('cost_usd') or 0 for c in log):.3f} -> SEARCH_LOG.json (check: scripts/board.sh verify-citations {root})")
 print(f"FILES {dl['nfiles'] if dl else 0} bytes={dl['bytes'] if dl else 0}{' TRUNCATED' if dl and dl['truncated'] else ''}")
 print("--- acceptance ---\n"+t["acceptance"])
 for r in item["reviews"]: print(f"--- prior review attempt {r['attempt']}: {r['verdict']}\n{r.get('notes') or ''}")
@@ -144,6 +152,9 @@ json.dump(goals,sys.stdout)
 PY
                  gh=$(python3 -c 'import hashlib,sys;print(hashlib.md5(open(sys.argv[1],"rb").read()).hexdigest())' "$gf")
                  sendfile PUT /manager/goals /tmp/board-goals.json | python3 -c 'import json,sys;d=json.load(sys.stdin);d["goals_md_hash"]=sys.argv[1];print(json.dumps(d,indent=4))' "$gh" ;;
+  search-log)    get "/manager/search-log?goal=${1:?goal id}&days=${2:-7}" | python3 -c 'import json,sys,time;[print("%s  %-11s %-70s  x%d  %d results"%(time.strftime("%m-%d %H:%MZ",time.gmtime(r["last"]/1000)),r["source"],r["query"][:70],r["n"],r["results"] or 0)) for r in json.load(sys.stdin)]' ;;
+  search-pace)   if [ -n "${1:-}" ]; then send PUT /manager/search-pace "{\"usd_per_day\":$1}" | j; else get /manager/search-pace | j; fi ;;
+  verify-citations) python3 "$HERE/scripts/verify-citations.py" "${1:?review DIR (from review-next)}" ;;
   memory)        get /manager/memory | j ;;
   memory-put)    python3 -c 'import json,sys;print(json.dumps({"memory":json.load(open(sys.argv[1]))}))' "${1:?memory.json}" > /tmp/board-memory.json; sendfile PUT /manager/memory /tmp/board-memory.json | j ;;
   pace)          if [ -n "${1:-}" ]; then send PUT /manager/pace "{\"usd_per_day\":$1}" | j; else get /manager/pace | j; fi ;;
