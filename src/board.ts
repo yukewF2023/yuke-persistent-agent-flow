@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { ideaRows } from "./ideas";
-import type { BoardStatus, DeliverableRow, DocMeta, DocRow, Env, EventRow, Feedback, FeedbackKind, FeedbackRow, GoalRow, GoalsProposal, LiveStatus, ProgressRow, ProgressSnapshot, Project, ProjectLogEntry, ProjectRow, ProjectStatus, ProjectSummary, ReviewRow, Role, SpendSummary, TaskRow, TaskStatus, WorkerRow } from "./types";
+import { DEFAULT_SEARCH_USD_PER_DAY, SEARCH_ATTEMPT_MAX_USD, SEARCH_CALLS_FIRST_ATTEMPT, SEARCH_CALLS_RETRY, SEARCH_SOURCES } from "./search";
+import type { BoardStatus, DeliverableRow, DocMeta, DocRow, Env, EventRow, Feedback, FeedbackKind, FeedbackRow, GoalRow, GoalsProposal, LiveStatus, ProgressRow, ProgressSnapshot, Project, ProjectLogEntry, ProjectRow, ProjectStatus, ProjectSummary, ReviewRow, Role, SearchCallRow, SearchSummary, SpendSummary, TaskRow, TaskStatus, WorkerRow } from "./types";
 import { json, readJson, secondsToUtcMidnight, utcDayStart } from "./util";
 
 /** OpenCode Go usage windows in USD (the workers' model provider). */
@@ -34,7 +35,14 @@ const FEEDBACK_NOTE_MAX = 500;
 const FEEDBACK_OPEN_MAX = 40;
 const FEEDBACK_KEEP_MS = 30 * 86_400_000;
 const GOALS_MAX_BYTES = 200_000;
-const KINDS = ["ts", "py", "check", "other", "doc"];
+const KINDS = ["ts", "py", "check", "other", "doc", "listen"];
+/** The search log keeps each call's normalized results (what the session saw) so citations can be checked; old ones are pruned. */
+const SEARCH_RESULTS_MAX_BYTES = 24_000;
+const SEARCH_KEEP_MS = 30 * 86_400_000;
+/** Gateway outages: this many failed calls within the window pause `listen` claims for the pause. */
+const SEARCH_BREAKER_FAILS = 5;
+const SEARCH_BREAKER_WINDOW_MS = 10 * 60_000;
+const SEARCH_BREAKER_PAUSE_MS = 15 * 60_000;
 const TERMINAL: TaskStatus[] = ["accepted", "rejected", "cancelled"];
 
 const num = (v: unknown, d = 0) => (typeof v === "number" && Number.isFinite(v) ? v : Number(v) || d);
@@ -171,6 +179,11 @@ export class Board extends DurableObject<Env> {
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS feedback (id INTEGER PRIMARY KEY AUTOINCREMENT, who TEXT NOT NULL, doc_id TEXT, doc_version INTEGER, idea TEXT, row TEXT,
         kind TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open', outcome TEXT, created_at INTEGER NOT NULL, handled_at INTEGER);
+      CREATE TABLE IF NOT EXISTS search_calls (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, task_id INTEGER NOT NULL, attempt INTEGER NOT NULL, goal_id TEXT NOT NULL,
+        source TEXT NOT NULL, query TEXT NOT NULL, params TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', est_usd REAL NOT NULL, cost_usd REAL,
+        n_results INTEGER NOT NULL DEFAULT 0, results TEXT, error TEXT);
+      CREATE INDEX IF NOT EXISTS search_calls_task ON search_calls(task_id, attempt);
+      CREATE INDEX IF NOT EXISTS search_calls_goal ON search_calls(goal_id, ts);
       DROP INDEX IF EXISTS progress_updated;
     `);
     // additive migrations (SQLite has no ADD COLUMN IF NOT EXISTS)
@@ -218,6 +231,12 @@ export class Board extends DurableObject<Env> {
       if (p[0] === "worker") {
         if (role !== "worker") return json({ error: "forbidden" }, 403);
         return await this.worker(request, url, p.slice(1));
+      }
+      if (p[0] === "search") {
+        if (role !== "search") return json({ error: "forbidden" }, 403);
+        if (m === "POST" && p[1] === "begin") return this.searchBegin(await readJson(request), Date.now());
+        if (m === "POST" && p[1] === "end") return this.searchEnd(await readJson(request), Date.now());
+        return json({ error: "not found" }, 404);
       }
       return json({ error: "not found" }, 404);
     } catch (err) {
@@ -271,6 +290,7 @@ export class Board extends DurableObject<Env> {
       docs: this.docIndex(),
       projects: this.q<ProjectSummary>("SELECT id, slug, doc_id, idea, status, pr_url, session_url, result, note, created_at, updated_at FROM projects ORDER BY id DESC LIMIT 40"),
       spend: this.spendSummary(now),
+      search: this.searchSummary(now),
       needsHuman: this.kvJson<{ ts: number; text: string }[]>("needs_human") ?? [],
       goalsProposal: ((gp) => (gp ? { ts: gp.ts, summary: gp.summary } : null))(this.kvJson<GoalsProposal>("goals:proposal")),
       feedbackOpen: Number(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM feedback WHERE status = 'open'")?.n ?? 0),
@@ -419,6 +439,10 @@ export class Board extends DurableObject<Env> {
       const task = this.one<TaskRow>("SELECT * FROM tasks WHERE id = ?", id);
       if (!task) return json({ error: "not found" }, 404);
       if (m === "GET" && p[2] === "bundle") {
+        // only for the task the asking worker holds, and only that task's dependencies
+        const forTask = this.one<TaskRow>("SELECT * FROM tasks WHERE id = ?", num(url.searchParams.get("for")));
+        const held = forTask && forTask.worker_id === str(url.searchParams.get("worker_id"), 80) && (forTask.status === "claimed" || forTask.status === "running");
+        if (!held || !(JSON.parse(forTask.deps) as number[]).includes(id)) return json({ error: "a bundle is only served as a dependency of the task you hold (?for=<task id>&worker_id=<you>)" }, 403);
         if (task.status !== "accepted") return json({ error: "task not accepted", status: task.status }, 409);
         const d = this.one<DeliverableRow>("SELECT * FROM deliverables WHERE task_id = ? ORDER BY attempt DESC LIMIT 1", id);
         if (!d) return json({ error: "no deliverable" }, 404);
@@ -482,10 +506,14 @@ export class Board extends DurableObject<Env> {
       this.run("UPDATE workers SET note = ? WHERE id = ?", `pacing: ${spend.pacing.reason}`, workerId);
       return json({ task: null, reason: spend.pacing.reason, retry_after_s: spend.pacing.retryAfterS, pacing: true });
     }
+    // `listen` tasks need live search: only a worker that can run it gets one (an older worker would burn the attempt
+    // without a key), and only while today's search budget and the gateway allow
+    const searchBlocked = this.searchBlocked(now);
+    const listenOk = (Array.isArray(body.caps) ? body.caps : []).includes("search") && !searchBlocked ? 1 : 0;
     // a worker with preferred goals takes their tasks first and falls back to any goal, so nobody sits idle while work exists
     const candidates = prefer.length
-      ? this.q<TaskRow>(`SELECT t.* FROM tasks t JOIN goals g ON g.id = t.goal_id WHERE t.status = 'ready' AND g.status = 'active' ORDER BY CASE WHEN t.goal_id IN (${prefer.map(() => "?").join(",")}) THEN 0 ELSE 1 END, t.priority, t.id LIMIT 20`, ...prefer)
-      : this.q<TaskRow>("SELECT t.* FROM tasks t JOIN goals g ON g.id = t.goal_id WHERE t.status = 'ready' AND g.status = 'active' ORDER BY t.priority, t.id LIMIT 20");
+      ? this.q<TaskRow>(`SELECT t.* FROM tasks t JOIN goals g ON g.id = t.goal_id WHERE t.status = 'ready' AND g.status = 'active' AND (t.kind <> 'listen' OR ? = 1) ORDER BY CASE WHEN t.goal_id IN (${prefer.map(() => "?").join(",")}) THEN 0 ELSE 1 END, t.priority, t.id LIMIT 20`, listenOk, ...prefer)
+      : this.q<TaskRow>("SELECT t.* FROM tasks t JOIN goals g ON g.id = t.goal_id WHERE t.status = 'ready' AND g.status = 'active' AND (t.kind <> 'listen' OR ? = 1) ORDER BY t.priority, t.id LIMIT 20", listenOk);
     let waiting = 0;
     for (const c of candidates) {
       const deps = (JSON.parse(c.deps) as number[]).filter((d) => Number.isInteger(d));
@@ -516,6 +544,10 @@ export class Board extends DurableObject<Env> {
       const previous = prev ? { attempt: prev.attempt, report: prev.report, files: JSON.parse(prev.files) as Record<string, string> } : null;
       this.touch();
       return json({ task: { ...task, deps }, reviews, deps: depInfo, previous, lease_until: now + lease });
+    }
+    if (searchBlocked && !candidates.length && this.one<{ id: number }>("SELECT t.id FROM tasks t JOIN goals g ON g.id = t.goal_id WHERE t.status = 'ready' AND g.status = 'active' AND t.kind = 'listen' LIMIT 1")) {
+      this.run("UPDATE workers SET note = ? WHERE id = ?", `pacing: ${searchBlocked.reason}`, workerId);
+      return json({ task: null, reason: searchBlocked.reason, retry_after_s: searchBlocked.retryAfterS, pacing: true });
     }
     const reason = candidates.length ? (waiting ? `${waiting} ready task(s) waiting on dependencies` : "no claimable task") : "no ready tasks";
     this.run("UPDATE workers SET note = ? WHERE id = ?", `idle: ${reason}`, workerId);
@@ -650,6 +682,106 @@ export class Board extends DurableObject<Env> {
     return json({ ok: true, status });
   }
 
+  // ---- live search (`listen` tasks; the router verifies the key's signature and calls the gateway) ----
+  private searchCap(): number {
+    return Number(this.kvGet("search_usd_per_day") ?? DEFAULT_SEARCH_USD_PER_DAY);
+  }
+  private searchDay(now: number): { usd: number; calls: number } {
+    return this.kvJson<{ usd: number; calls: number }>(`search:day:${this.today(now)}`) ?? { usd: 0, calls: 0 };
+  }
+  private searchBook(now: number, usd: number, calls: number) {
+    const cur = this.searchDay(now);
+    this.kvSet(`search:day:${this.today(now)}`, JSON.stringify({ usd: Math.max(0, cur.usd + usd), calls: cur.calls + calls }));
+  }
+  private searchSummary(now: number): SearchSummary {
+    const day = this.searchDay(now);
+    const paused = Number(this.kvGet("search:paused_until") ?? 0);
+    return { todayUsd: day.usd, calls: day.calls, capUsdPerDay: this.searchCap(), pausedUntil: paused > now ? paused : null };
+  }
+  /** Why no `listen` task may start now (the gateway is paused, or too little of today's search budget is left to be worth a session), or null. */
+  private searchBlocked(now: number): { reason: string; retryAfterS: number } | null {
+    const s = this.searchSummary(now);
+    if (s.pausedUntil) return { reason: `live search paused after repeated gateway failures until ${new Date(s.pausedUntil).toISOString().slice(11, 16)} UTC`, retryAfterS: Math.ceil((s.pausedUntil - now) / 1000) + 5 };
+    if (s.todayUsd + 0.05 > s.capUsdPerDay) return { reason: `today's search budget is used ($${s.todayUsd.toFixed(2)} of $${s.capUsdPerDay.toFixed(2)}); listen tasks resume 00:00 UTC`, retryAfterS: Math.min(900, secondsToUtcMidnight(now)) };
+    return null;
+  }
+
+  /**
+   * POST /search/begin: the claim a genuine key names must still be live (same task, attempt and claimed_at, unexpired
+   * lease), and the attempt and the day must have budget left. Books the source's expected cost and logs a pending call.
+   */
+  private searchBegin(body: Record<string, unknown>, now: number): Response {
+    const task = this.one<TaskRow>("SELECT * FROM tasks WHERE id = ?", num(body.task_id));
+    const live = task && task.kind === "listen" && (task.status === "claimed" || task.status === "running") && task.attempt === num(body.attempt) && task.claimed_at === num(body.claimed_at) && (task.lease_until ?? 0) > now;
+    if (!task || !live) return json({ error: "this search key is no longer valid: its task was submitted, failed, released or claimed again" }, 401);
+    const source = str(body.source, 20);
+    const price = SEARCH_SOURCES[source];
+    if (!price) return json({ error: `unknown source; one of ${Object.keys(SEARCH_SOURCES).join(", ")}` }, 404);
+    this.meterLazy = true;
+    const used = this.one<{ n: number; usd: number }>("SELECT COUNT(*) AS n, COALESCE(SUM(COALESCE(cost_usd, est_usd)), 0) AS usd FROM search_calls WHERE task_id = ? AND attempt = ?", task.id, task.attempt) ?? { n: 0, usd: 0 };
+    const maxCalls = task.attempt > 1 ? SEARCH_CALLS_RETRY : SEARCH_CALLS_FIRST_ATTEMPT;
+    const remaining = (extraCalls: number, extraUsd: number) => ({ calls: Math.max(0, maxCalls - used.n - extraCalls), usd: Math.max(0, Math.round((SEARCH_ATTEMPT_MAX_USD - used.usd - extraUsd) * 1e4) / 1e4) });
+    if (used.n >= maxCalls) return json({ error: `this attempt's search budget is used (${used.n} of ${maxCalls} calls): write up what you have`, remaining: remaining(0, 0) }, 429);
+    if (price.est > 0 && used.usd + price.est > SEARCH_ATTEMPT_MAX_USD) {
+      return json({ error: `this attempt's paid-search budget is used ($${used.usd.toFixed(3)} of $${SEARCH_ATTEMPT_MAX_USD.toFixed(2)}); hn, hn-thread, forum and forum-topic are free and still work`, remaining: remaining(0, 0) }, 429);
+    }
+    const day = this.searchSummary(now);
+    if (day.pausedUntil) return json({ error: "live search is paused after repeated gateway failures; write up what you have" }, 503);
+    if (price.est > 0 && day.todayUsd + price.est > day.capUsdPerDay) {
+      if (!this.kvGet(`search:cap_hit:${this.today(now)}`)) {
+        this.kvSet(`search:cap_hit:${this.today(now)}`, "1");
+        this.event("board", "search.cap", task.id, `today's search budget ($${day.capUsdPerDay.toFixed(2)}) is used: paid sources refuse and no listen task starts until 00:00 UTC`);
+        this.touch();
+      }
+      return json({ error: "today's search budget is used; hn, hn-thread, forum and forum-topic are free and still work", remaining: remaining(0, 0) }, 429);
+    }
+    const row = this.q<{ id: number }>(
+      "INSERT INTO search_calls(ts, task_id, attempt, goal_id, source, query, params, status, est_usd) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?) RETURNING id",
+      now,
+      task.id,
+      task.attempt,
+      task.goal_id,
+      source,
+      str(body.query, 300),
+      JSON.stringify(body.params ?? {}).slice(0, 2000),
+      price.est
+    )[0];
+    this.searchBook(now, price.est, 1);
+    return json({ call_id: row.id, remaining: remaining(1, price.est) });
+  }
+
+  /** POST /search/end: settle a call to what it cost (the gateway's figure, or the source's worst case when unknown) and keep what the session saw. */
+  private searchEnd(body: Record<string, unknown>, now: number): Response {
+    const row = this.one<Pick<SearchCallRow, "id" | "task_id" | "est_usd" | "status">>("SELECT id, task_id, est_usd, status FROM search_calls WHERE id = ?", num(body.call_id));
+    if (!row || row.status !== "pending") return json({ error: "no such pending call" }, 404);
+    const ok = body.ok === true;
+    const cost = Math.min(1, Math.max(0, num(body.cost_usd)));
+    const results = Array.isArray(body.results) ? body.results : [];
+    const text = JSON.stringify(results);
+    this.meterLazy = true;
+    this.run(
+      "UPDATE search_calls SET status = ?, cost_usd = ?, n_results = ?, results = ?, error = ? WHERE id = ?",
+      ok ? "ok" : "error",
+      cost,
+      results.length,
+      ok && text.length <= SEARCH_RESULTS_MAX_BYTES ? text : null,
+      ok ? null : str(body.error, 300) || "failed",
+      row.id
+    );
+    this.searchBook(now, cost - row.est_usd, 0);
+    if (body.gateway_down === true) {
+      const fails = (this.kvJson<number[]>("search:fails") ?? []).filter((t) => now - t < SEARCH_BREAKER_WINDOW_MS);
+      fails.push(now);
+      if (fails.length >= SEARCH_BREAKER_FAILS) {
+        this.kvSet("search:paused_until", String(now + SEARCH_BREAKER_PAUSE_MS));
+        this.kvSet("search:fails", null);
+        this.event("board", "search.paused", row.task_id, `${fails.length} search calls failed at the gateway within 10 minutes: no listen task starts for 15 minutes`);
+        this.touch();
+      } else this.kvSet("search:fails", JSON.stringify(fails));
+    }
+    return json({ ok: true });
+  }
+
   // ---- manager API ----
   private async manager(request: Request, url: URL, p: string[]): Promise<Response> {
     const m = request.method;
@@ -690,6 +822,11 @@ export class Board extends DurableObject<Env> {
     }
     if (p[0] === "tasks" && !p[1] && m === "GET") return json(this.listTasks(url));
     if (p[0] === "tasks" && !p[1] && m === "POST") return this.createTasks(await readJson<unknown>(request), now);
+    if (p[0] === "tasks" && p[1] && p[2] === "search-log" && m === "GET") {
+      // every search call of every attempt, with the results the session saw: the manager checks citations against these
+      const rows = this.q<SearchCallRow>("SELECT * FROM search_calls WHERE task_id = ? ORDER BY id LIMIT 300", Number(p[1]));
+      return json(rows.map((r) => ({ ...r, params: JSON.parse(r.params), results: r.results ? JSON.parse(r.results) : [] })));
+    }
     if (p[0] === "tasks" && p[1] && m === "GET") return this.taskDetail(Number(p[1]));
     if (p[0] === "tasks" && p[1] && m === "PATCH") return this.patchTask(Number(p[1]), await readJson(request), now);
     if (p[0] === "tasks" && p[1] && p[2] === "review" && m === "POST") return this.review(Number(p[1]), await readJson(request), now);
@@ -783,6 +920,27 @@ export class Board extends DurableObject<Env> {
     if (p[0] === "feedback" && !p[1] && m === "GET") return json(this.listFeedback(url));
     if (p[0] === "feedback" && !p[1] && m === "POST") return this.feedbackCreate(await readJson(request), now);
     if (p[0] === "feedback" && p[1] && m === "PATCH") return this.feedbackHandle(Number(p[1]), await readJson(request), now);
+    if (p[0] === "search-log" && m === "GET") {
+      // the queries a goal ran recently (no results): the manager hands them to the next specs so sessions do not repeat them
+      const days = Math.min(30, Math.max(1, num(url.searchParams.get("days"), 7)));
+      return json(
+        this.q<{ source: string; query: string; n: number; results: number; last: number }>(
+          "SELECT source, query, COUNT(*) AS n, SUM(n_results) AS results, MAX(ts) AS last FROM search_calls WHERE goal_id = ? AND ts >= ? GROUP BY source, query ORDER BY last DESC LIMIT 80",
+          str(url.searchParams.get("goal"), 40),
+          now - days * 86_400_000
+        )
+      );
+    }
+    if (p[0] === "search-pace" && m === "GET") return json(this.searchSummary(now));
+    if (p[0] === "search-pace" && m === "PUT") {
+      const body = await readJson<{ usd_per_day?: unknown }>(request);
+      const v = num(body.usd_per_day, -1);
+      if (!(v >= 0 && v <= 5)) return json({ error: "usd_per_day must be between 0 and 5" }, 400);
+      this.kvSet("search_usd_per_day", String(v));
+      this.event("manager", "search.pace", null, `daily search budget set to $${v.toFixed(2)}`);
+      this.touch();
+      return json({ ok: true, search: this.searchSummary(now) });
+    }
     if (p[0] === "pace" && m === "PUT") {
       const body = await readJson<{ usd_per_day?: unknown }>(request);
       const v = num(body.usd_per_day);
@@ -872,8 +1030,9 @@ export class Board extends DurableObject<Env> {
       );
       const progress = this.run("DELETE FROM progress WHERE updated_at < ?", now - PROGRESS_KEEP_MS);
       const feedback = this.run("DELETE FROM feedback WHERE status = 'handled' AND handled_at < ?", now - FEEDBACK_KEEP_MS);
+      const search = this.run("DELETE FROM search_calls WHERE ts < ?", now - SEARCH_KEEP_MS);
       this.touch();
-      return json({ ok: true, deleted: { events, spend, deliverables, progress, feedback } });
+      return json({ ok: true, deleted: { events, spend, deliverables, progress, feedback, search } });
     }
     return json({ error: "not found" }, 404);
   }
@@ -1112,7 +1271,11 @@ export class Board extends DurableObject<Env> {
         skipped.push({ key, reason: depError });
         continue;
       }
-      const kind = KINDS.includes(String(t.kind)) ? String(t.kind) : "ts";
+      if (t.kind !== undefined && !KINDS.includes(String(t.kind))) {
+        skipped.push({ key, reason: `unknown kind ${String(t.kind)}; one of ${KINDS.join(", ")}` });
+        continue;
+      }
+      const kind = t.kind === undefined ? "ts" : String(t.kind);
       if (this.one<{ id: number }>("SELECT id FROM tasks WHERE key = ?", key)) {
         skipped.push({ key, reason: "duplicate key" });
         continue;

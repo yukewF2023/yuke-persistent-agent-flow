@@ -19,12 +19,20 @@ export interface Env {
   BUILDER_FIRE_TOKEN?: string;
   /** Bearer token for /app/* (the DeepSpace app, which signs the human in and acts for her). It can approve, record and wake; it cannot reach /manager/*. */
   APP_TOKEN?: string;
+  /** Bearer token for GET /worker/export (the VM's nightly backup). When set, WORKER_TOKEN no longer exports the board. */
+  BACKUP_TOKEN?: string;
+  /** Signs the per-task search keys handed to `listen` sessions (src/search.ts). Unset: no task is handed out as searchable. */
+  SEARCH_KEY_SECRET?: string;
+  /** The agent-board app's research gateway (…/api/research) and its bearer secret (wrangler.jsonc vars; secret). */
+  SEARCH_GATEWAY_URL?: string;
+  SEARCH_GATEWAY_TOKEN?: string;
 }
 
-export type Role = "public" | "manager" | "worker" | "app";
+/** `search`: the router forwarding a call made with a genuine per-task search key (never a caller-supplied header). */
+export type Role = "public" | "manager" | "worker" | "app" | "search";
 
 export type TaskStatus = "ready" | "claimed" | "running" | "review" | "accepted" | "rejected" | "blocked" | "cancelled";
-export type TaskKind = "ts" | "py" | "check" | "other" | "doc";
+export type TaskKind = "ts" | "py" | "check" | "other" | "doc" | "listen";
 
 export interface GoalRow {
   id: string;
@@ -274,6 +282,33 @@ export interface SpendSummary {
   days: { day: string; usd: number; tasks: number }[];
 }
 
+/** Live search for `listen` tasks today: spend and calls (estimates until each call settles) against the daily cap. */
+export interface SearchSummary {
+  todayUsd: number;
+  calls: number;
+  capUsdPerDay: number;
+  /** set after repeated gateway failures: no `listen` task is handed out until then */
+  pausedUntil: number | null;
+}
+
+/** One search call made by a `listen` session: the query log the manager checks citations against. */
+export interface SearchCallRow {
+  id: number;
+  ts: number;
+  task_id: number;
+  attempt: number;
+  goal_id: string;
+  source: string;
+  query: string;
+  params: string; // JSON
+  status: "pending" | "ok" | "error";
+  est_usd: number;
+  cost_usd: number | null;
+  n_results: number;
+  results: string | null; // JSON Result[]
+  error: string | null;
+}
+
 /** Shape of GET /api/live: what the Workers view needs, uncached and cheap (a handful of row reads). */
 export interface LiveStatus {
   generatedAt: number;
@@ -301,6 +336,7 @@ export interface BoardStatus {
   /** approved ideas and what became of them, newest first (at most 40) */
   projects: ProjectSummary[];
   spend: SpendSummary;
+  search: SearchSummary;
   needsHuman: { ts: number; text: string }[];
   /** feedback from the human that the manager has not handled yet (items at /api/feedback) */
   feedbackOpen: number;

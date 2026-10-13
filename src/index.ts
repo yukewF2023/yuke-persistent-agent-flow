@@ -1,5 +1,6 @@
 import { Board } from "./board";
 import { getFile, getRawFile, putFile } from "./github";
+import { SEARCH_SOURCES, searchKey, verifySearchKey } from "./search";
 import type { Env, GoalsProposal, Project, Role } from "./types";
 import { bearerOk, json, readJson } from "./util";
 
@@ -62,20 +63,100 @@ async function wakeManager(env: Env, stub: DurableObjectStub, origin: string, wh
   return { ok: true, status: 200, message: "Manager run started; it usually finishes within about five minutes.", sessionUrl: r.sessionUrl };
 }
 
+const searchConfigured = (env: Env) => Boolean(env.SEARCH_KEY_SECRET && env.SEARCH_GATEWAY_URL && env.SEARCH_GATEWAY_TOKEN);
+/** What one call may send back to the session and keep in the log (the log keeps exactly what the session saw). */
+const SEARCH_RESULTS_MAX_BYTES = 24_000;
+
+/**
+ * POST /search/<source> with a per-task key (src/search.ts): a `listen` session's live search. The signature is checked
+ * here, so a forged key never reaches the Durable Object; the DO then checks the claim is live and books the budget
+ * (begin), this Worker calls the agent-board app's research gateway, and the DO settles what the call cost and keeps
+ * the results as the task's query log (end). The gateway call runs under waitUntil, so a session that hangs up mid-call
+ * cannot leave it unsettled.
+ */
+async function search(request: Request, env: Env, ctx: ExecutionContext, stub: DurableObjectStub, origin: string, source: string): Promise<Response> {
+  if (!searchConfigured(env)) return json({ error: "live search is not configured on the board" }, 503);
+  const key = /^Bearer\s+(.+)$/i.exec(request.headers.get("authorization") ?? "")?.[1]?.trim() ?? "";
+  const claim = key ? await verifySearchKey(env.SEARCH_KEY_SECRET!, key) : null;
+  if (!claim) return json({ error: "unauthorized" }, 401);
+  if (!SEARCH_SOURCES[source]) return json({ error: `unknown source; one of ${Object.keys(SEARCH_SOURCES).join(", ")}` }, 404);
+  const text = await request.text();
+  if (text.length > 4000) return json({ error: "request too large" }, 413);
+  let params: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(text || "{}");
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) params = parsed as Record<string, unknown>;
+  } catch {
+    return json({ error: "body must be a JSON object" }, 400);
+  }
+  const query = String(params.q ?? params.url ?? params.id ?? "").slice(0, 300);
+  const dobj = async (path: string, body: unknown) => {
+    const res = await stub.fetch(new Request(origin + path, { method: "POST", headers: { "x-board-role": "search", "content-type": "application/json" }, body: JSON.stringify(body) }));
+    return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
+  };
+  const begin = await dobj("/search/begin", { task_id: claim.taskId, attempt: claim.attempt, claimed_at: claim.claimedAt, source, query, params });
+  if (begin.status !== 200) return json(begin.body, begin.status);
+  const work = (async () => {
+    let status = 502;
+    let out: Record<string, unknown> = {};
+    let gatewayDown = false;
+    try {
+      const res = await fetch(`${env.SEARCH_GATEWAY_URL!.replace(/\/$/, "")}/${source}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${env.SEARCH_GATEWAY_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify(params),
+        signal: AbortSignal.timeout(35_000)
+      });
+      status = res.status;
+      out = ((await res.json().catch(() => null)) as Record<string, unknown> | null) ?? {};
+      // an answer without the gateway's shape (a platform error page, a 5xx with no billing) counts against the gateway
+      gatewayDown = !res.ok && typeof out.billing !== "string";
+      if (gatewayDown) out = { error: `the research gateway answered HTTP ${res.status}`, cost_usd: SEARCH_SOURCES[source].worst };
+    } catch (err) {
+      gatewayDown = true;
+      status = 504;
+      out = { error: `the research gateway did not answer: ${String((err as Error)?.message ?? err).slice(0, 120)}`, cost_usd: SEARCH_SOURCES[source].worst };
+    }
+    const ok = status === 200 && Array.isArray(out.results);
+    let results = ok ? (out.results as unknown[]) : [];
+    while (results.length && JSON.stringify(results).length > SEARCH_RESULTS_MAX_BYTES) results = results.slice(0, -1);
+    const cost = typeof out.cost_usd === "number" ? out.cost_usd : SEARCH_SOURCES[source].worst;
+    await dobj("/search/end", { call_id: begin.body.call_id, ok, cost_usd: cost, results, error: ok ? null : out.error, gateway_down: gatewayDown });
+    return ok
+      ? json({ results, cost_usd: cost, remaining: begin.body.remaining })
+      : json({ error: String(out.error ?? `HTTP ${status}`), cost_usd: cost, remaining: begin.body.remaining }, status === 200 ? 502 : status);
+  })();
+  ctx.waitUntil(work.catch(() => undefined));
+  return await work;
+}
+
 /**
  * Thin router. Authenticates and forwards to the single Board Durable Object with an `x-board-role` header the DO trusts.
  *
  * Nothing here is public. People see the board through the DeepSpace app (agent-board), which signs them in and calls
  * /app/* (approve, project actions, feedback, goals and the manager's proposed goal changes, wake) and GET /api/* with APP_TOKEN; the manager and builder routines use /manager/* (and the same read-only /api/*)
- * with ORCHESTRATOR_TOKEN; the VM workers use /worker/* with WORKER_TOKEN. Every other request gets a bare 404.
+ * with ORCHESTRATOR_TOKEN; the VM workers use /worker/* with WORKER_TOKEN, except the nightly export, which takes BACKUP_TOKEN
+ * once that is set; `listen` sessions use POST /search/<source> with their per-task key. Every other request gets a bare 404.
  */
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
     const method = request.method;
+    if (parts[0] === "search" && parts[1] && !parts[2] && method === "POST") {
+      try {
+        return await search(request, env, ctx, env.BOARD.get(env.BOARD.idFromName("main")), url.origin, parts[1]);
+      } catch (err) {
+        console.error("search error", err);
+        return json({ error: String((err as Error)?.message ?? err) }, 500);
+      }
+    }
     let role: Role = "public";
-    if (parts[0] === "manager") {
+    if (parts[0] === "worker" && parts[1] === "export" && env.BACKUP_TOKEN) {
+      // the nightly backup has its own token: the workers' token no longer reads the whole board
+      if (!bearerOk(request, env.BACKUP_TOKEN)) return json({ error: "unauthorized" }, 401);
+      role = "worker";
+    } else if (parts[0] === "manager") {
       if (!bearerOk(request, env.ORCHESTRATOR_TOKEN)) return json({ error: "unauthorized" }, 401);
       role = "manager";
     } else if (parts[0] === "worker") {
@@ -205,6 +286,19 @@ export default {
       headers.set("x-board-role", role);
       const init: RequestInit = { method, headers };
       if (method !== "GET" && method !== "HEAD") init.body = await request.arrayBuffer();
+      if (role === "worker" && parts[1] === "claim" && method === "POST") {
+        // A worker that can search says so (caps: ["search"]); without live search configured here, it is told nothing
+        // searchable exists. A `listen` claim comes back with its per-task search key.
+        const body = (await new Response(init.body as ArrayBuffer).json().catch(() => ({}))) as Record<string, unknown>;
+        if (!searchConfigured(env)) delete body.caps;
+        headers.delete("content-length");
+        const res = await stub.fetch(new Request(request.url, { method, headers, body: JSON.stringify(body) }));
+        const out = (await res.json().catch(() => ({}))) as { task?: { id: number; kind: string; attempt: number; claimed_at: number } | null };
+        if (res.ok && out.task?.kind === "listen" && searchConfigured(env)) {
+          (out as Record<string, unknown>).search_key = await searchKey(env.SEARCH_KEY_SECRET!, { taskId: out.task.id, attempt: out.task.attempt, claimedAt: out.task.claimed_at });
+        }
+        return json(out, res.status);
+      }
       return await stub.fetch(new Request(request.url, init));
     } catch (err) {
       console.error("router error", err);

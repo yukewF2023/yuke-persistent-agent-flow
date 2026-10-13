@@ -15,7 +15,7 @@ const parse = (path) => {
   const out = {};
   if (!existsSync(path)) return out;
   for (const line of readFileSync(path, "utf8").split("\n")) {
-    const m = /^([A-Z_]+)\s*=\s*"?(.*?)"?\s*$/.exec(line.trim());
+    const m = /^([A-Z0-9_]+)\s*=\s*"?(.*?)"?\s*$/.exec(line.trim());
     if (m && m[2]) out[m[1]] = m[2];
   }
   return out;
@@ -32,7 +32,11 @@ const keep = (k, v) => {
 keep("ORCHESTRATOR_TOKEN", rand());
 keep("WORKER_TOKEN", rand());
 keep("APP_TOKEN", rand()); // the DeepSpace app's token for /app/* and, once the board is closed, /api/*
-for (const k of Object.keys(vars)) if (!["ORCHESTRATOR_TOKEN", "WORKER_TOKEN", "APP_TOKEN"].includes(k)) {
+keep("BACKUP_TOKEN", rand()); // the VM's nightly export (GET /worker/export); the workers' token no longer reads the whole board
+keep("SEARCH_KEY_SECRET", rand()); // signs the per-task search keys of `listen` sessions; never leaves the Worker
+keep("SEARCH_GATEWAY_TOKEN", rand()); // the agent-board app's research gateway: set the same value there (npx deepspace secrets set SEARCH_GATEWAY_TOKEN)
+const SECRETS = ["ORCHESTRATOR_TOKEN", "WORKER_TOKEN", "APP_TOKEN", "BACKUP_TOKEN", "SEARCH_KEY_SECRET", "SEARCH_GATEWAY_TOKEN"];
+for (const k of Object.keys(vars)) if (!SECRETS.includes(k)) {
   delete vars[k];
   console.log(`  ${k}: dropped (no longer used by the Worker)`);
 }
@@ -40,8 +44,10 @@ writeFileSync(DEV_VARS, Object.entries(vars).map(([k, v]) => `${k}="${v}"`).join
 chmodSync(DEV_VARS, 0o600);
 console.log(`Wrote ${DEV_VARS} (mode 600). Push with: npm run secrets:push`);
 
-// 2. The VM's env file: board URL + worker token + the OpenCode Go key from the local opencode credential store
-let goKey = parse(VM_ENV).OPENCODE_API_KEY ?? "";
+// 2. The VM's env file: board URL + worker token + the OpenCode Go key from the local opencode credential store,
+// the backup token (install.sh moves it to a root-only file the workers never see) and each worker's preferred goals
+const vmVars = parse(VM_ENV);
+let goKey = vmVars.OPENCODE_API_KEY ?? "";
 if (!goKey) {
   try {
     const auth = JSON.parse(readFileSync(join(homedir(), ".local/share/opencode/auth.json"), "utf8"));
@@ -50,6 +56,12 @@ if (!goKey) {
 }
 console.log(goKey ? "  OPENCODE_API_KEY: from ~/.local/share/opencode/auth.json" : "  OPENCODE_API_KEY: MISSING — run `opencode auth login` (OpenCode Go) and re-run");
 mkdirSync(dirname(VM_ENV), { recursive: true });
-writeFileSync(VM_ENV, [`BOARD_URL=${BOARD_URL}`, `WORKER_TOKEN=${vars.WORKER_TOKEN}`, `OPENCODE_API_KEY=${goKey}`, `OPENCODE_MODEL=opencode-go/deepseek-v4.1-flash`].join("\n") + "\n");
+const goals1 = vmVars.WORKER_GOALS_1 ?? "F";
+const goals2 = vmVars.WORKER_GOALS_2 ?? "G";
+console.log(`  WORKER_GOALS_1=${goals1} WORKER_GOALS_2=${goals2} (edit worker/agent-worker.env to change; install.sh writes them to the VM)`);
+writeFileSync(
+  VM_ENV,
+  [`BOARD_URL=${BOARD_URL}`, `WORKER_TOKEN=${vars.WORKER_TOKEN}`, `BACKUP_TOKEN=${vars.BACKUP_TOKEN}`, `OPENCODE_API_KEY=${goKey}`, `OPENCODE_MODEL=opencode-go/deepseek-v4.1-flash`, `WORKER_GOALS_1=${goals1}`, `WORKER_GOALS_2=${goals2}`].join("\n") + "\n"
+);
 chmodSync(VM_ENV, 0o600);
 console.log(`Wrote ${VM_ENV} (mode 600). Ship it to the VM with worker/README.md's commands.`);

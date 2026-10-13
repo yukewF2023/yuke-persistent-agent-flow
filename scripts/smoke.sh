@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# End-to-end smoke test of the board API (about 130 checks). Usage, from the repo root with `npm run dev` running: scripts/smoke.sh http://localhost:8787
-# Reads ORCHESTRATOR_TOKEN / WORKER_TOKEN from .dev.vars. Safe to re-run (unique task keys per run); wipe .wrangler/state between runs for a clean board.
+# End-to-end smoke test of the board API (about 180 checks). Usage, from the repo root, with the board running locally as
+#   npx wrangler dev --port 8787 --var SEARCH_GATEWAY_URL:http://127.0.0.1:8799
+# then: scripts/smoke.sh http://localhost:8787   (it starts a stand-in research gateway on :8799, scripts/smoke-gateway.py)
+# Reads the tokens from .dev.vars (npm run setup:env). Safe to re-run (unique task keys per run); wipe .wrangler/state between runs for a clean board.
 # Written for bash 3.2: every response is captured with R=$(...) first (no nested quotes inside "$(...)").
 set -u
 U="${1:-http://localhost:8787}"
@@ -8,6 +10,7 @@ set -a; . ./.dev.vars; set +a
 M=(-H "Authorization: Bearer $ORCHESTRATOR_TOKEN" -H "content-type: application/json")
 W=(-H "Authorization: Bearer $WORKER_TOKEN" -H "content-type: application/json")
 T=/tmp/claude-smoke; mkdir -p $T
+python3 "$(dirname "$0")/smoke-gateway.py" 8799 & GW=$!; trap 'kill $GW 2>/dev/null' EXIT; sleep 1
 pass=0; fail=0; RUN=$RANDOM; echo "run suffix $RUN"
 check() { if [[ "$3" == *"$2"* ]]; then pass=$((pass+1)); echo "ok   $1"; else fail=$((fail+1)); echo "FAIL $1 — expected '$2' in: $(echo "$3" | tr -d '\n' | head -c 300)"; fi; }
 code() { curl -s -o /dev/null -w "%{http_code}" "$@"; }
@@ -53,7 +56,9 @@ R=$(curl -s "${M[@]}" "$U/api/status"); check "status shows review queue" "T/one
 R=$(curl -s "${M[@]}" "$U/manager/review-queue?limit=1"); check "review queue has files" 'out/src/a.ts' "$R"
 R=$(curl -s "${M[@]}" -X POST "$U/manager/tasks/$ID1/review" -d '{"verdict":"accept","notes":"tests pass"}'); check "accept" '"status": "accepted"' "$R"
 R=$(curl -s "${W[@]}" -X POST "$U/worker/claim" -d '{"worker_id":"w3","host":"smoke","version":"t"}'); check "w3 now claims T/three (dep accepted)" "\"key\": \"T/three-$RUN\"" "$R"; check "claim returns dep info" "\"key\": \"T/one-$RUN\"" "$R"
-R=$(curl -s "${W[@]}" "$U/worker/tasks/$ID1/bundle"); check "bundle of accepted dep" 'export const a = 1' "$R"
+R=$(code "${W[@]}" "$U/worker/tasks/$ID1/bundle"); check "a bundle is not served outside a held task" "403" "$R"
+R=$(code "${W[@]}" "$U/worker/tasks/$ID1/bundle?for=$ID3&worker_id=w2"); check "nor to a worker that does not hold the task" "403" "$R"
+R=$(curl -s "${W[@]}" "$U/worker/tasks/$ID1/bundle?for=$ID3&worker_id=w3"); check "bundle of accepted dep" 'export const a = 1' "$R"
 R=$(curl -s "${W[@]}" -X POST "$U/worker/tasks/$ID2/submit" -d '{"worker_id":"w2","attempt":1,"report":"meh","files":{"out/REPORT.md":"x"},"steps":3,"cost_usd":0.02}'); check "submit T/two" '"status": "review"' "$R"
 R=$(curl -s "${M[@]}" -X POST "$U/manager/tasks/$ID2/review" -d '{"verdict":"reject","notes":"missing tests"}'); check "reject → ready (attempt 1 of 2)" '"status": "ready"' "$R"
 R=$(curl -s "${W[@]}" -X POST "$U/worker/claim" -d '{"worker_id":"w2","host":"smoke","version":"t"}'); check "w2 re-claims T/two attempt 2" '"attempt": 2' "$R"; check "prior review notes included" 'missing tests' "$R"
@@ -177,4 +182,48 @@ R=$(curl -s "${A[@]}" "$U/app/goals"); check "app reads the goals file" '## Goal
 R=$(code "${A[@]}" -X PUT "$U/app/goals" -d '{"content":"## Goal Z: x\n","sha":"abc","message":"m"}'); check "app goals save without a GitHub token → 503" "503" "$R"
 R=$(code "${A[@]}" -X POST "$U/app/wake" -d '{"reason":"smoke","who":"owner@example.com"}'); check "app wake goes through the same guard" "429" "$R"
 R=$(code "${A[@]}" "$U/app/nope"); check "unknown app route → 404" "404" "$R"
+# ---- live search for listen tasks: per-task keys, the gateway (a local stub), caps, the query log ----
+S=(-H "content-type: application/json")
+R=$(curl -s "${M[@]}" -X PUT "$U/manager/goals" -d '[{"id":"T","title":"Smoke goal","body":"test","min_ready":2},{"id":"L","title":"Smoke listening goal","body":"listen","min_ready":1}]'); check "listening goal upserted" '"upserted": 2' "$R"
+echo "[{\"goal_id\":\"L\",\"key\":\"L/one-$RUN\",\"kind\":\"listen\",\"title\":\"listen one\",\"spec\":\"search\",\"acceptance\":\"- cited\",\"priority\":1},{\"goal_id\":\"L\",\"key\":\"L/odd-$RUN\",\"kind\":\"nope\",\"title\":\"x\",\"spec\":\"x\",\"acceptance\":\"x\"}]" > $T/listen.json
+R=$(curl -s "${M[@]}" -X POST "$U/manager/tasks" -d @$T/listen.json); check "listen task created" "\"key\": \"L/one-$RUN\"" "$R"; check "unknown kind skipped" 'unknown kind nope' "$R"; LID=$(echo "$R" | jget "d['created'][0]['id']")
+R=$(curl -s "${W[@]}" -X POST "$U/worker/claim" -d '{"worker_id":"w9","host":"smoke","version":"t"}'); check "a worker without caps never gets a listen task" "0" "$(echo "$R" | grep -c "L/one-$RUN")"
+[ "$(echo "$R" | jget "(d.get('task') or {}).get('id') or ''")" != "" ] && R2=$(curl -s "${W[@]}" -X POST "$U/worker/tasks/$(echo "$R" | jget "d['task']['id']")/release" -d '{"worker_id":"w9","reason":"smoke"}')
+R=$(curl -s "${W[@]}" -X POST "$U/worker/claim" -d '{"worker_id":"w8","host":"smoke","version":"t","caps":["search"],"goals":["L"]}'); check "a worker with caps gets the listen task" "\"key\": \"L/one-$RUN\"" "$R"; check "the claim carries a search key" '"search_key"' "$R"
+K1=$(echo "$R" | jget "d['search_key']")
+R=$(code "${S[@]}" -X POST "$U/search/x" -d '{"q":"outgrew airtable"}'); check "search without a key → 401" "401" "$R"
+R=$(code -H "Authorization: Bearer $LID.1.1760000000000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" "${S[@]}" -X POST "$U/search/x" -d '{"q":"outgrew airtable"}'); check "a forged key → 401" "401" "$R"
+R=$(code -H "Authorization: Bearer $ORCHESTRATOR_TOKEN" "${S[@]}" -X POST "$U/search/x" -d '{"q":"outgrew airtable"}'); check "the manager token is not a search key" "401" "$R"
+R=$(curl -s -H "Authorization: Bearer $K1" "${S[@]}" -X POST "$U/search/x" -d '{"q":"outgrew airtable","days":7}'); check "search through the key" '"results"' "$R"; check "search says what is left" '"remaining"' "$R"
+R=$(code -H "Authorization: Bearer $K1" "${S[@]}" -X POST "$U/search/nope" -d '{"q":"x"}'); check "unknown source → 404" "404" "$R"
+R=$(curl -s "${W[@]}" -X POST "$U/worker/tasks/$LID/release" -d '{"worker_id":"w8","reason":"smoke"}'); check "release the listen task" '"ok": true' "$R"
+R=$(code -H "Authorization: Bearer $K1" "${S[@]}" -X POST "$U/search/x" -d '{"q":"after release"}'); check "a released task's key → 401" "401" "$R"
+sleep 1
+R=$(curl -s "${W[@]}" -X POST "$U/worker/claim" -d '{"worker_id":"w8","host":"smoke","version":"t","caps":["search"],"goals":["L"]}'); check "re-claim the listen task" "\"key\": \"L/one-$RUN\"" "$R"; K2=$(echo "$R" | jget "d['search_key']")
+R=$(code -H "Authorization: Bearer $K1" "${S[@]}" -X POST "$U/search/x" -d '{"q":"old key"}'); check "the old key stays dead after a re-claim with the same attempt" "401" "$R"
+R=$(curl -s -H "Authorization: Bearer $K2" "${S[@]}" -X POST "$U/search/x" -d '{"q":"build vs buy"}'); check "the new key works" '"results"' "$R"
+R=$(curl -s "${M[@]}" -X PUT "$U/manager/search-pace" -d '{"usd_per_day":0.004}'); check "search budget set" '"capUsdPerDay": 0.004' "$R"
+R=$(curl -s -H "Authorization: Bearer $K2" "${S[@]}" -X POST "$U/search/x" -d '{"q":"over budget"}'); check "paid search refused past the daily budget" "today's search budget is used" "$R"
+R=$(curl -s -H "Authorization: Bearer $K2" "${S[@]}" -X POST "$U/search/hn" -d '{"q":"free still works"}'); check "free sources still work past it" '"results"' "$R"
+echo "[{\"goal_id\":\"L\",\"key\":\"L/two-$RUN\",\"kind\":\"listen\",\"title\":\"listen two\",\"spec\":\"search\",\"acceptance\":\"- cited\",\"priority\":1}]" > $T/listen2.json
+R=$(curl -s "${M[@]}" -X POST "$U/manager/tasks" -d @$T/listen2.json); L2=$(echo "$R" | jget "d['created'][0]['id']")
+R=$(curl -s "${W[@]}" -X POST "$U/worker/claim" -d '{"worker_id":"w7","host":"smoke","version":"t","caps":["search"],"goals":["L"]}'); check "no listen task starts past the daily budget" "0" "$(echo "$R" | grep -c "L/two-$RUN")"
+[ "$(echo "$R" | jget "(d.get('task') or {}).get('id') or ''")" != "" ] && R2=$(curl -s "${W[@]}" -X POST "$U/worker/tasks/$(echo "$R" | jget "d['task']['id']")/release" -d '{"worker_id":"w7","reason":"smoke"}')
+R=$(curl -s "${M[@]}" -X PUT "$U/manager/search-pace" -d '{"usd_per_day":1}'); check "search budget back to $1" '"capUsdPerDay": 1' "$R"
+R=$(curl -s -H "Authorization: Bearer $K2" "${S[@]}" -X POST "$U/search/web" -d '{"q":"retained"}'); check "a retained charge is reported" '"cost_usd": 0.65' "$R"
+R=$(curl -s "${M[@]}" "$U/api/status"); check "the retained charge is booked" "True" "$(echo "$R" | jget "d['search']['todayUsd'] > 0.6")"
+R=$(curl -s -H "Authorization: Bearer $K2" "${S[@]}" -X POST "$U/search/x" -d '{"q":"after retained"}'); check "the attempt's paid budget stops further paid calls" "paid-search budget is used" "$R"
+R=$(curl -s "${M[@]}" "$U/manager/tasks/$LID/search-log"); check "the task's search log keeps what the session saw" 'we outgrew airtable fast; build vs buy' "$R"; check "the log spans attempts and errors" '"status": "error"' "$R"
+R=$(curl -s "${M[@]}" "$U/manager/search-log?goal=L&days=7"); check "the goal's recent queries" '"query": "build vs buy"' "$R"
+R=$(curl -s "${W[@]}" -X POST "$U/worker/tasks/$LID/submit" -d '{"worker_id":"w8","report":"listened","files":{"out/MEMO.md":"x"},"steps":2,"cost_usd":0.01}'); check "submit the listen task" '"status": "review"' "$R"
+R=$(code -H "Authorization: Bearer $K2" "${S[@]}" -X POST "$U/search/hn" -d '{"q":"after submit"}'); check "a submitted task's key → 401" "401" "$R"
+R=$(curl -s "${W[@]}" -X POST "$U/worker/claim" -d '{"worker_id":"w7","host":"smoke","version":"t","caps":["search"],"goals":["L"]}'); check "the second listen task starts" "\"key\": \"L/two-$RUN\"" "$R"; K3=$(echo "$R" | jget "d['search_key']")
+for i in 1 2 3 4 5; do R=$(curl -s -H "Authorization: Bearer $K3" "${S[@]}" -X POST "$U/search/hn" -d '{"q":"down"}'); done; check "a gateway outage answers an error" 'the research gateway answered HTTP 500' "$R"
+R=$(curl -s "${M[@]}" "$U/api/status"); check "five outages pause live search" "True" "$(echo "$R" | jget "bool(d['search']['pausedUntil'])")"
+R=$(code -H "Authorization: Bearer $K3" "${S[@]}" -X POST "$U/search/hn" -d '{"q":"while paused"}'); check "search refused while paused" "503" "$R"
+if [ -n "${BACKUP_TOKEN:-}" ]; then
+  R=$(code "${W[@]}" "$U/worker/export"); check "the worker token no longer exports the board" "401" "$R"
+  R=$(curl -s -H "Authorization: Bearer $BACKUP_TOKEN" "$U/worker/export"); check "the backup token exports it" '"exportedAt"' "$R"; check "the export leaves out search results" "0" "$(echo "$R" | grep -c 'we outgrew airtable fast')"
+fi
+R=$(curl -s "${M[@]}" -X POST "$U/manager/prune"); check "prune reports search rows" '"search"' "$R"
 echo; echo "passed $pass, failed $fail"
